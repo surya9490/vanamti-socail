@@ -1,60 +1,24 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
+import { requireScope } from '@/lib/auth/rbac'
 
 /**
- * GET   /api/flows/[id]  — fetch one flow with its nodes.
+ * GET   /api/flows/[id]  — fetch one flow with its nodes (flows.read).
  * PUT   /api/flows/[id]  — replace name/trigger/entry/fallback + the
- *                          full node graph (delete-then-insert under
- *                          the hood; not atomic, but the runner is
- *                          resilient to mid-edit reads — node_not_found
- *                          gracefully ends the run).
- * DELETE /api/flows/[id] — hard delete (RLS+CASCADE clean up nodes,
- *                          runs, events).
- *
- * All three require a signed-in caller who owns the flow. Flows is in
- * soft-GA — the beta gate that previously 404'd non-beta accounts is
- * gone; the "Beta" label in the UI is the only remaining signal.
+ *                          full node graph (flows.manage).
+ * DELETE /api/flows/[id] — hard delete; RLS+CASCADE clean up nodes,
+ *                          runs, events (flows.manage).
  */
-
-async function requireOwnership(
-  flowId: string,
-): Promise<
-  | {
-      ok: true
-      userId: string
-      supabase: Awaited<ReturnType<typeof createClient>>
-    }
-  | { ok: false; status: number; body: { error: string } }
-> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return { ok: false, status: 401, body: { error: 'Unauthorized' } }
-  }
-  // RLS scopes this to the caller — a flow owned by another user
-  // returns null (404 below).
-  const { data: flow } = await supabase
-    .from('flows')
-    .select('id')
-    .eq('id', flowId)
-    .maybeSingle()
-  if (!flow) {
-    return { ok: false, status: 404, body: { error: 'Not found' } }
-  }
-  return { ok: true, userId: user.id, supabase }
-}
 
 export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params
-  const guard = await requireOwnership(id)
-  if (!guard.ok) return NextResponse.json(guard.body, { status: guard.status })
-  const { supabase } = guard
+  const guard = await requireScope('flows.read')
+  if (!guard.ok) return guard.response
+  const supabase = await createClient()
 
   const [{ data: flow }, { data: nodes }] = await Promise.all([
     supabase.from('flows').select('*').eq('id', id).maybeSingle(),
@@ -91,8 +55,8 @@ export async function PUT(
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params
-  const guard = await requireOwnership(id)
-  if (!guard.ok) return NextResponse.json(guard.body, { status: guard.status })
+  const guard = await requireScope('flows.manage')
+  if (!guard.ok) return guard.response
 
   const body = (await request.json().catch(() => null)) as PutBody | null
   if (!body) {
@@ -177,8 +141,8 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params
-  const guard = await requireOwnership(id)
-  if (!guard.ok) return NextResponse.json(guard.body, { status: guard.status })
+  const guard = await requireScope('flows.manage')
+  if (!guard.ok) return guard.response
 
   // CASCADE on flow_nodes / flow_runs / flow_run_events handles the
   // children. Active runs end abruptly — there's no graceful "drain"

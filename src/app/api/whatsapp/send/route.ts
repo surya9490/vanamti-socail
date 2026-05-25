@@ -14,22 +14,14 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
+import { requireScope } from '@/lib/auth/rbac'
 
 export async function POST(request: Request) {
   try {
+    const guard = await requireScope('inbox.write')
+    if (!guard.ok) return guard.response
     const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      )
-    }
+    const user = { id: guard.profile.user_id }
 
     // Per-user rate limit. Bucket key is scoped to this route so
     // `/broadcast` has an independent budget.
@@ -70,12 +62,14 @@ export async function POST(request: Request) {
       )
     }
 
-    // Fetch conversation and contact
+    // Org-shared: any inbox.write member can reply in any conversation
+    // (RLS already gates this on the inbox.write scope). Dropping the
+    // user_id filter that used to constrain to "conversations the
+    // current user created".
     const { data: conversation, error: convError } = await supabase
       .from('conversations')
       .select('*, contact:contacts(*)')
       .eq('id', conversation_id)
-      .eq('user_id', user.id)
       .single()
 
     if (convError || !conversation) {
@@ -102,12 +96,16 @@ export async function POST(request: Request) {
       )
     }
 
-    // Fetch and decrypt WhatsApp config
+    // Org-wide single config: pick the first connected row (admins
+    // share one WhatsApp integration per deployment). Migration 013
+    // leaves the legacy UNIQUE(user_id) constraint in place, so this
+    // resolves to the single active config row in practice.
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
       .select('*')
-      .eq('user_id', user.id)
-      .single()
+      .eq('status', 'connected')
+      .limit(1)
+      .maybeSingle()
 
     if (configError || !config) {
       return NextResponse.json(
@@ -297,7 +295,6 @@ export async function POST(request: Request) {
           ended_at: new Date().toISOString(),
           end_reason: 'agent_replied',
         })
-        .eq('user_id', user.id)
         .eq('contact_id', contact.id)
         .eq('status', 'active')
       if (pauseErr) {

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { validateFlowForActivation } from '@/lib/flows/validate'
+import { requireScope } from '@/lib/auth/rbac'
 
 /**
  * POST /api/flows/[id]/activate
@@ -23,13 +23,8 @@ export async function POST(
 ) {
   const { id } = await context.params
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const guard = await requireScope('flows.manage')
+  if (!guard.ok) return guard.response
 
   const body = (await request.json().catch(() => null)) as
     | { status?: 'draft' | 'active' | 'archived' }
@@ -42,8 +37,8 @@ export async function POST(
     )
   }
 
-  // Ownership via RLS — caller's client.
-  const { data: existing } = await supabase
+  const admin = supabaseAdmin()
+  const { data: existing } = await admin
     .from('flows')
     .select('id')
     .eq('id', id)
@@ -51,8 +46,6 @@ export async function POST(
   if (!existing) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
-
-  const admin = supabaseAdmin()
 
   if (status === 'active') {
     // Re-load with the full payload the validator needs.

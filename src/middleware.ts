@@ -25,28 +25,78 @@ export async function middleware(request: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser()
 
-  // Auth pages - redirect to dashboard if already logged in
+  const path = request.nextUrl.pathname
+
+  // Auth pages - redirect to dashboard if already logged in (but only if
+  // the user's account is active; pending/disabled users get bounced to
+  // the pending-approval screen instead).
   if (user && (
-    request.nextUrl.pathname === '/login' ||
-    request.nextUrl.pathname === '/signup' ||
-    request.nextUrl.pathname === '/forgot-password'
+    path === '/login' ||
+    path === '/signup' ||
+    path === '/forgot-password'
   )) {
     const url = request.nextUrl.clone()
     url.pathname = '/dashboard'
     return NextResponse.redirect(url)
   }
 
-  // Protected pages - redirect to login if not authenticated
-  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/automations', '/settings']
-  if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
+  // Protected pages - redirect to login if not authenticated.
+  const protectedPaths = [
+    '/dashboard', '/inbox', '/contacts', '/pipelines',
+    '/broadcasts', '/automations', '/flows', '/settings',
+  ]
+  const isProtectedPath = protectedPaths.some(p => path.startsWith(p))
+  if (!user && isProtectedPath) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
   }
 
-  // API routes that need auth (not webhooks)
-  if (!user && request.nextUrl.pathname.startsWith('/api/whatsapp/') &&
-      !request.nextUrl.pathname.includes('/webhook')) {
+  // Pending / disabled gating. Authed users with status != 'active' are
+  // shunted to a "waiting for admin approval" screen. We avoid touching
+  // the DB on every static asset hit by only looking up profile.status
+  // when the path actually targets the app or its API.
+  if (user && (isProtectedPath || path.startsWith('/api/')) && !path.startsWith('/api/whatsapp/webhook') && path !== '/pending-approval') {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('status')
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    const status = profile?.status
+
+    if (status === 'pending' || status === 'disabled') {
+      // Block API access outright for non-active users; the UI gets a
+      // redirect to the approval page.
+      if (path.startsWith('/api/')) {
+        return NextResponse.json(
+          { error: status === 'pending' ? 'Account pending approval' : 'Account disabled' },
+          { status: 403 },
+        )
+      }
+      const url = request.nextUrl.clone()
+      url.pathname = '/pending-approval'
+      return NextResponse.redirect(url)
+    }
+  }
+
+  // If a fully active user hits /pending-approval, send them home.
+  if (user && path === '/pending-approval') {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('status')
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (profile?.status === 'active') {
+      const url = request.nextUrl.clone()
+      url.pathname = '/dashboard'
+      return NextResponse.redirect(url)
+    }
+  }
+
+  // API routes that need auth (not webhooks).
+  if (!user && path.startsWith('/api/whatsapp/') &&
+      !path.includes('/webhook')) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 

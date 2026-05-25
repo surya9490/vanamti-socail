@@ -8,6 +8,7 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit';
+import { requireScope } from '@/lib/auth/rbac';
 
 /**
  * POST /api/whatsapp/react
@@ -20,16 +21,10 @@ import {
  */
 export async function POST(request: Request) {
   try {
+    const guard = await requireScope('inbox.write');
+    if (!guard.ok) return guard.response;
     const supabase = await createClient();
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const user = { id: guard.profile.user_id };
 
     const limit = checkRateLimit(`react:${user.id}`, RATE_LIMITS.react);
     if (!limit.success) {
@@ -69,11 +64,11 @@ export async function POST(request: Request) {
       );
     }
 
+    // Org-shared: RLS gates this on inbox.write; no per-user filter.
     const { data: conversation, error: convError } = await supabase
       .from('conversations')
       .select('id, user_id, contact:contacts(phone)')
       .eq('id', targetMessage.conversation_id)
-      .eq('user_id', user.id)
       .maybeSingle();
 
     if (convError || !conversation) {
@@ -93,12 +88,13 @@ export async function POST(request: Request) {
       );
     }
 
-    // WhatsApp config + access token
+    // Org-wide single config. See comment in /api/whatsapp/send.
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
       .select('phone_number_id, access_token')
-      .eq('user_id', user.id)
-      .single();
+      .eq('status', 'connected')
+      .limit(1)
+      .maybeSingle();
 
     if (configError || !config) {
       return NextResponse.json(

@@ -1,3 +1,8 @@
+-- Supabase installs extensions into the `extensions` schema; each
+-- migration runs in its own session, so we have to re-extend the
+-- search_path here for `uuid_generate_v4()` to resolve unqualified.
+SET search_path = public, extensions, pg_catalog;
+
 -- ============================================================
 -- Conversational Flows: stateful, branching WhatsApp chatbot.
 --

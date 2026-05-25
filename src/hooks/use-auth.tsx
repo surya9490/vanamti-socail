@@ -10,13 +10,16 @@ import {
 } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { User } from "@supabase/supabase-js";
+import type { Role, Scope, UserStatus } from "@/types";
 
 interface Profile {
   id: string;
   full_name: string | null;
   email: string;
   avatar_url: string | null;
-  role: string | null;
+  role: Role;
+  status: UserStatus;
+  scopes: Scope[];
   /**
    * Opted-in beta feature keys for this account. No current feature
    * reads this — Flows was the last user and went to soft-GA in PR
@@ -43,6 +46,15 @@ interface AuthContextValue {
    * and may take the "not opted in" branch incorrectly.
    */
   profileLoading: boolean;
+  /** True iff the profile has loaded AND role === 'admin' AND status === 'active'. */
+  isAdmin: boolean;
+  /**
+   * `true` iff the user is active AND either an admin (admins hold every
+   * scope implicitly) or has the named scope in `profile.scopes`. Returns
+   * `false` during profile load — callers should also check `profileLoading`
+   * if they need to distinguish "not yet known" from "denied".
+   */
+  hasScope: (scope: Scope) => boolean;
   signOut: () => Promise<void>;
   /** Re-fetch the current user's profile row — call after a save from
    *  the settings form so header/sidebar reflect the change without a
@@ -76,7 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, full_name, email, avatar_url, role, beta_features")
+        .select("id, full_name, email, avatar_url, role, status, scopes, beta_features")
         .eq("user_id", userId)
         .maybeSingle();
 
@@ -91,12 +103,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (data) {
-        // `beta_features` is `NOT NULL DEFAULT ARRAY[]` in the DB, but
-        // narrow defensively in case the column hasn't been migrated yet
-        // (older deployments running 011 lazily) — `null` reads as no
-        // opt-ins, which is the safe default for any future beta gate.
+        // role/status/scopes/beta_features are NOT NULL in the DB after
+        // migration 013, but narrow defensively in case the column hasn't
+        // been migrated yet on older deployments. `'pending'` and `[]`
+        // are the safe deny-by-default fallbacks.
         setProfile({
           ...data,
+          role: (data.role ?? "member") as Role,
+          status: (data.status ?? "pending") as UserStatus,
+          scopes: (data.scopes ?? []) as Scope[],
           beta_features: data.beta_features ?? [],
         });
       }
@@ -191,9 +206,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await fetchProfile(user.id);
   }, [user?.id, fetchProfile]);
 
+  const isAdmin =
+    profile?.role === "admin" && profile?.status === "active";
+
+  const hasScope = useCallback(
+    (scope: Scope) => {
+      if (!profile || profile.status !== "active") return false;
+      if (profile.role === "admin") return true;
+      return profile.scopes.includes(scope);
+    },
+    [profile],
+  );
+
   return (
     <AuthContext.Provider
-      value={{ user, profile, loading, profileLoading, signOut, refreshProfile }}
+      value={{
+        user,
+        profile,
+        loading,
+        profileLoading,
+        isAdmin,
+        hasScope,
+        signOut,
+        refreshProfile,
+      }}
     >
       {children}
     </AuthContext.Provider>
@@ -214,6 +250,8 @@ export function useAuth(): AuthContextValue {
       profile: null,
       loading: false,
       profileLoading: false,
+      isAdmin: false,
+      hasScope: () => false,
       signOut: async () => {
         window.location.href = "/login";
       },

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import { requireScope } from '@/lib/auth/rbac'
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -50,16 +51,10 @@ interface NewRecipient {
 
 export async function POST(request: Request) {
   try {
+    const guard = await requireScope('broadcasts.send')
+    if (!guard.ok) return guard.response
     const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const user = { id: guard.profile.user_id }
 
     // Per-user broadcast budget. Note: this limits how often a user
     // can *start* a campaign, not how many messages go out inside
@@ -107,11 +102,13 @@ export async function POST(request: Request) {
       )
     }
 
+    // Org-wide single config. See comment in /api/whatsapp/send.
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
       .select('*')
-      .eq('user_id', user.id)
-      .single()
+      .eq('status', 'connected')
+      .limit(1)
+      .maybeSingle()
 
     if (configError || !config) {
       return NextResponse.json(

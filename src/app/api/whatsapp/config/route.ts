@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { verifyPhoneNumber } from '@/lib/whatsapp/meta-api'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
+import { requireScope } from '@/lib/auth/rbac'
 
 /**
  * GET /api/whatsapp/config
@@ -18,21 +19,14 @@ import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
  */
 export async function GET() {
   try {
+    const guard = await requireScope('whatsapp.config')
+    if (!guard.ok) return guard.response
     const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
       .select('phone_number_id, access_token, status')
-      .eq('user_id', user.id)
+      .eq('user_id', guard.profile.user_id)
       .maybeSingle()
 
     if (configError) {
@@ -109,16 +103,10 @@ export async function GET() {
  */
 export async function POST(request: Request) {
   try {
+    const guard = await requireScope('whatsapp.config')
+    if (!guard.ok) return guard.response
     const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+    const user = { id: guard.profile.user_id }
 
     const body = await request.json()
     const { phone_number_id, waba_id, access_token, verify_token } = body
@@ -230,21 +218,14 @@ export async function POST(request: Request) {
  */
 export async function DELETE() {
   try {
+    const guard = await requireScope('whatsapp.config')
+    if (!guard.ok) return guard.response
     const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
 
     const { error: deleteError } = await supabase
       .from('whatsapp_config')
       .delete()
-      .eq('user_id', user.id)
+      .eq('user_id', guard.profile.user_id)
 
     if (deleteError) {
       console.error('Error deleting whatsapp_config:', deleteError)

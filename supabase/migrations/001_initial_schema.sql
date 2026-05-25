@@ -4,8 +4,12 @@
 -- for policies/triggers (Postgres has no CREATE POLICY IF NOT EXISTS).
 -- ============================================================
 
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Enable UUID extension. Supabase installs extensions into the
+-- `extensions` schema rather than `public`, so we extend the
+-- search_path for this session so `uuid_generate_v4()` resolves
+-- without a schema qualifier in every CREATE TABLE below.
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;
+SET search_path = public, extensions, pg_catalog;
 
 -- ============================================================
 -- PROFILES

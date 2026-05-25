@@ -1,10 +1,62 @@
+/**
+ * Single-org RBAC primitives (migration 013).
+ *
+ * The deployment IS the org. Every user is one of:
+ *   - admin  : implicitly has every scope; can manage members.
+ *   - member : sees only what their `scopes` grant.
+ *
+ * Status gates access on top of role:
+ *   - pending  : just signed up, admin hasn't approved yet.
+ *   - active   : approved, RLS lets them in.
+ *   - disabled : soft-revoked; auth still works but RLS rejects everything.
+ */
+export type Role = 'admin' | 'member';
+export type UserStatus = 'pending' | 'active' | 'disabled';
+
+/**
+ * Canonical scope vocabulary. Strings (not an enum) so RLS policies
+ * in 013_single_org_rbac.sql can compare directly against
+ * `profiles.scopes` without a typecast.
+ */
+export type Scope =
+  | 'inbox.read' | 'inbox.write'
+  | 'contacts.read' | 'contacts.write'
+  | 'deals.read' | 'deals.write'
+  | 'broadcasts.read' | 'broadcasts.send'
+  | 'automations.read' | 'automations.manage'
+  | 'flows.read' | 'flows.manage'
+  | 'templates.manage'
+  | 'tags.manage'
+  | 'whatsapp.config'
+  | 'settings.read';
+
+export const ALL_SCOPES: Scope[] = [
+  'inbox.read', 'inbox.write',
+  'contacts.read', 'contacts.write',
+  'deals.read', 'deals.write',
+  'broadcasts.read', 'broadcasts.send',
+  'automations.read', 'automations.manage',
+  'flows.read', 'flows.manage',
+  'templates.manage',
+  'tags.manage',
+  'whatsapp.config',
+  'settings.read',
+];
+
 export interface Profile {
   id: string;
   user_id: string;
   full_name: string;
   email: string;
   avatar_url?: string;
-  role: string;
+  role: Role;
+  status: UserStatus;
+  /**
+   * Granted scope strings. Ignored when role='admin' — admins hold
+   * every scope implicitly. Empty by default; admin grants from the
+   * Members UI.
+   */
+  scopes: Scope[];
   /**
    * Opted-in beta feature keys for this account. The column survives
    * for future beta gates; no current feature reads it (Flows was

@@ -70,6 +70,14 @@ export default function RootLayout({
       lang="en"
       data-theme={DEFAULT_THEME}
       className={`${inter.variable} h-full antialiased`}
+      // The theme-boot script above mutates document.documentElement
+      // before React hydrates, and some browser extensions (Google Tag
+      // Assistant, Grammarly, …) inject their own attributes onto
+      // <html>/<body> pre-hydrate. Both are expected sources of
+      // attribute drift on the root element; suppress the warning
+      // here only so genuine hydration mismatches deeper in the tree
+      // still surface.
+      suppressHydrationWarning
     >
       <head>
         <Script
