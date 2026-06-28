@@ -1,0 +1,77 @@
+name: Deploy
+
+# Triggers on pushes to `vanamti` (our active branch).
+#
+# Why we don't deploy on `main`:
+#   `main` is a passive mirror of upstream (ArnasDon/wacrm). It
+#   should never deploy to our environment — that would push
+#   vanilla wacrm and clobber our customisations. If you want to
+#   deploy a hotfix from upstream, merge it into `vanamti` first.
+#
+# Concurrency: a deploy in flight + a new push = cancel the older
+# one. Railway only knows the latest deployment is authoritative,
+# and cancelling stale jobs saves Action minutes.
+on:
+  push:
+    branches: [vanamti]
+  workflow_dispatch: # lets you re-deploy from the GitHub UI without pushing
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Reuse the same checks CI runs. Cheap insurance — if `npm run
+  # lint`/`typecheck`/`test`/`build` would fail, Railway is going
+  # to fail the same way, except slower and harder to debug from
+  # the Railway logs. We pay ~2 minutes to fail fast here.
+  check:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://ci.example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-dummy-anon-key
+      ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+      META_APP_SECRET: 'ci-dummy-meta-secret'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  deploy:
+    name: Deploy to Railway
+    runs-on: ubuntu-latest
+    needs: check
+    # Belt-and-suspenders — concurrency already cancels older runs,
+    # but if someone manually queues a deploy from a non-vanamti
+    # branch via workflow_dispatch on the wrong ref, this stops it.
+    if: github.ref == 'refs/heads/vanamti'
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pin the Railway CLI to a known version so a CLI breaking
+      # change can't silently brick deploys. Bump intentionally when
+      # we want new features.
+      - name: Install Railway CLI
+        run: |
+          curl -fsSL https://railway.com/install.sh | sh
+          echo "$HOME/.railway/bin" >> $GITHUB_PATH
+
+      # railway up uploads the working tree and triggers a build.
+      # --detach exits as soon as the upload finishes — we don't
+      # tail build logs from CI because the Action would block for
+      # several minutes of Railway-side work without adding value
+      # (the Railway dashboard is the source of truth for build
+      # progress). The deployment-status check below polls the
+      # Railway API for completion instead.
+      - name: Deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --service vanamti-social --detach

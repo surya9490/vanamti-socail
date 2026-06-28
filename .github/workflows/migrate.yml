@@ -1,0 +1,65 @@
+name: Apply Supabase migrations
+
+# Manual-only — run from GitHub UI → Actions → "Apply Supabase
+# migrations" → Run workflow → confirm the branch + project.
+#
+# Why this is NOT automatic on push:
+#   A `supabase db push` against prod is destructive and irreversible.
+#   Running it on every commit means a half-tested migration on a
+#   feature branch can rewrite RLS or drop a column in production
+#   before the rest of the change is even merged. We deliberately
+#   keep this opt-in so you sign off each apply explicitly.
+#
+# When to use it:
+#   - You added a new `supabase/migrations/*.sql` file and want it
+#     applied to the remote project without doing `supabase db push`
+#     from your laptop.
+#   - You merged upstream and new migrations came along.
+#
+# Requires GitHub repo secrets:
+#   SUPABASE_ACCESS_TOKEN — a personal access token from
+#                           https://supabase.com/dashboard/account/tokens
+#   SUPABASE_PROJECT_REF  — your project ref (e.g. hqnavfwfwgdztshcdddf,
+#                           the subdomain of your supabase.co URL).
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "apply" to confirm you want to push migrations to production.'
+        required: true
+        default: ''
+
+jobs:
+  push:
+    name: supabase db push
+    runs-on: ubuntu-latest
+    # Reject runs where the confirmation field doesn't match exactly.
+    # A small friction tax that prevents an accidental "Run workflow"
+    # click from rewriting prod.
+    if: github.event.inputs.confirm == 'apply'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.101.0
+
+      - name: Link project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase link --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
+
+      - name: Show pending diff (read-only sanity check)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        # `migration list` shows which local migrations the remote
+        # is missing. The push step below applies them; this is just
+        # human-readable proof in the Action log of what's about to
+        # change.
+        run: supabase migration list
+
+      - name: Apply migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase db push --yes

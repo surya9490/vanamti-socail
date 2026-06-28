@@ -1,10 +1,15 @@
 name: CI
 
+# Run on PRs/pushes targeting either branch:
+#   - vanamti: our active downstream branch (where work lands)
+#   - main:    passive mirror of upstream — we keep CI on it so a
+#              future upstream merge that breaks the build trips here
+#              instead of being noticed only at deploy time.
 on:
   pull_request:
-    branches: [main]
+    branches: [vanamti, main]
   push:
-    branches: [main]
+    branches: [vanamti, main]
 
 # Cancel older CI runs for the same branch when a new commit arrives —
 # saves minutes when someone pushes a stack of fixes to one PR.
