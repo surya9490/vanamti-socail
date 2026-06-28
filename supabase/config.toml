@@ -14,13 +14,17 @@ project_id = "hqnavfwfwgdztshcdddf"
 # client passes isn't on `additional_redirect_urls`, Supabase
 # substitutes this — which is why a stale localhost site_url turns
 # every prod reset link into a localhost link.
-site_url = "https://vanamti-social-production.up.railway.app"
+site_url = "https://social.vanamati.com"
 
 # Allow-list of redirect URLs the client may pass via `redirectTo`.
-# Wildcard `/**` matches every path under the host. Localhost is
-# kept so local `next dev` runs keep working without flipping
-# site_url back and forth.
+# Wildcard `/**` matches every path under the host. Kept entries:
+#   - social.vanamati.com: the canonical custom domain (primary).
+#   - vanamti-social-production.up.railway.app: Railway's
+#     auto-generated domain, retained as a fallback so direct hits
+#     still work if DNS for social.vanamati.com is misconfigured.
+#   - localhost:3000: local `next dev` without flipping site_url.
 additional_redirect_urls = [
+  "https://social.vanamati.com/**",
   "https://vanamti-social-production.up.railway.app/**",
   "http://localhost:3000/**",
 ]
