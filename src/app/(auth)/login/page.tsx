@@ -110,14 +110,15 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          <p className="mt-6 text-center text-sm text-slate-400">
-            Don&apos;t have an account?{" "}
-            <Link
-              href="/signup"
-              className="text-primary hover:text-primary/80"
-            >
-              Create account
-            </Link>
+          {/*
+            Self-signup is disabled — this deployment is invite-only.
+            Admin invites new members from Settings → Members. We don't
+            link to /signup anymore (the route doesn't exist), and
+            Supabase rejects signUp() at the auth layer regardless.
+            A small note guides users who showed up expecting it.
+          */}
+          <p className="mt-6 text-center text-xs text-slate-500">
+            New here? Ask your admin to send you an invite.
           </p>
         </CardContent>
       </Card>

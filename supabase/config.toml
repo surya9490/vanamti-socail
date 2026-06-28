@@ -1,0 +1,73 @@
+# Supabase project configuration synced to the hosted project via
+# `supabase config push`. The previous minimal version of this file
+# accidentally reset email-confirmation, OTP, and MFA-TOTP settings
+# to CLI defaults because `config push` substitutes defaults for any
+# field not declared locally — it does NOT preserve remote-only
+# values. This version pins those settings back to their pre-push
+# values alongside the URL change that motivated the file.
+
+project_id = "hqnavfwfwgdztshcdddf"
+
+[auth]
+# Canonical URL Supabase uses as the fallback for every email link
+# (password reset, magic link, email confirm). If the redirectTo the
+# client passes isn't on `additional_redirect_urls`, Supabase
+# substitutes this — which is why a stale localhost site_url turns
+# every prod reset link into a localhost link.
+site_url = "https://vanamti-social-production.up.railway.app"
+
+# Allow-list of redirect URLs the client may pass via `redirectTo`.
+# Wildcard `/**` matches every path under the host. Localhost is
+# kept so local `next dev` runs keep working without flipping
+# site_url back and forth.
+additional_redirect_urls = [
+  "https://vanamti-social-production.up.railway.app/**",
+  "http://localhost:3000/**",
+]
+
+# Disable public self-signup — this deployment is invite-only.
+# Admins create users via POST /api/admin/members/invite (which uses
+# the service role + supabase.auth.admin.inviteUserByEmail). With
+# this flag off, supabase.auth.signUp() from the client is rejected,
+# so even if the /signup page were reached it couldn't create an
+# account.
+enable_signup = false
+
+# --- Pinned defaults restored from the previous push ---
+
+[auth.email]
+# Same intent at the email-provider level: no self-serve email
+# signup. Required in addition to [auth].enable_signup because
+# Supabase checks both.
+enable_signup = false
+double_confirm_changes = true
+# Invited users go through a verifyOtp(type:'invite') flow that
+# already establishes a valid session — they don't need an
+# additional "confirm your email" step on top.
+enable_confirmations = false
+secure_password_change = false
+max_frequency = "1m0s"
+otp_length = 8
+otp_expiry = 3600
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
+# Override Supabase's default recovery email template so the link
+# uses {{ .TokenHash }} instead of {{ .ConfirmationURL }}. The
+# default goes through /auth/v1/verify → ?code= (PKCE), which fails
+# whenever the email is opened in a different browser/device than
+# the one that requested the reset. The token_hash flow doesn't
+# need a verifier in storage and works universally. See the comment
+# at the bottom of recovery.html for the full story.
+[auth.email.template.recovery]
+subject = "Reset your password"
+content_path = "./supabase/templates/recovery.html"
+
+# Same token_hash treatment for invitations — admin clicks Invite,
+# Supabase emails the user, link goes directly to /auth/callback
+# (not /auth/v1/verify) so it works across browsers/devices.
+[auth.email.template.invite]
+subject = "You've been invited to wacrm"
+content_path = "./supabase/templates/invite.html"

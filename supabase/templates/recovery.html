@@ -1,0 +1,37 @@
+<h2>Reset your password</h2>
+
+<p>Hi,</p>
+
+<p>
+  Click the link below to choose a new password for your wacrm
+  account. This link expires in 1 hour and can only be used once.
+</p>
+
+<p>
+  <a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=recovery&next=/reset-password">
+    Reset your password
+  </a>
+</p>
+
+<p>
+  If you didn't request this, you can safely ignore this email — no
+  changes have been made to your account.
+</p>
+
+<!--
+  Why this template overrides the Supabase default:
+
+  The default template uses `{{ .ConfirmationURL }}`, which expands
+  to https://<project>.supabase.co/auth/v1/verify?token=…&redirect_to=…
+  That endpoint redirects to redirect_to with `?code=…` (PKCE flow),
+  and exchangeCodeForSession requires a verifier in the requesting
+  browser's storage. In practice users open reset emails on a
+  different device than they requested from (desktop → phone), so
+  the verifier is missing and the reset fails with
+  "PKCE code verifier not found in storage".
+
+  This template instead links directly to /auth/callback with
+  `token_hash` + `type`, which our callback consumes via
+  supabase.auth.verifyOtp({token_hash, type}). No PKCE verifier
+  required — works cross-browser, cross-device.
+-->

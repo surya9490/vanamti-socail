@@ -103,31 +103,39 @@ export default function SettingsPage() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="profile" className="space-y-6">
+        {/*
+          keepMounted on every panel: Base UI tabs unmount inactive
+          panels by default, which wipes any unsaved form state when
+          the user switches tabs (e.g. pasting Meta credentials into
+          WhatsAppConfig, then briefly switching to Templates to copy
+          something, would clear the WhatsApp form). Keeping panels
+          mounted preserves React state across tab switches.
+        */}
+        <TabsContent value="profile" className="space-y-6" keepMounted>
           <ProfileForm />
           <PasswordForm />
           <SessionsCard />
         </TabsContent>
 
         {isAdmin && (
-          <TabsContent value="members">
+          <TabsContent value="members" keepMounted>
             <MembersManager />
           </TabsContent>
         )}
 
-        <TabsContent value="whatsapp">
+        <TabsContent value="whatsapp" keepMounted>
           <WhatsAppConfig />
         </TabsContent>
 
-        <TabsContent value="templates">
+        <TabsContent value="templates" keepMounted>
           <TemplateManager />
         </TabsContent>
 
-        <TabsContent value="tags">
+        <TabsContent value="tags" keepMounted>
           <TagManager />
         </TabsContent>
 
-        <TabsContent value="appearance">
+        <TabsContent value="appearance" keepMounted>
           <AppearancePanel />
         </TabsContent>
       </Tabs>

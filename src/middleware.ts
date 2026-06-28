@@ -27,12 +27,20 @@ export async function middleware(request: NextRequest) {
 
   const path = request.nextUrl.pathname
 
+  // Self-signup is disabled (deployment is invite-only). The /signup
+  // route no longer exists; redirect any stale link / bookmark to
+  // /login so users land somewhere sensible instead of a 404.
+  if (path === '/signup') {
+    const url = request.nextUrl.clone()
+    url.pathname = '/login'
+    return NextResponse.redirect(url)
+  }
+
   // Auth pages - redirect to dashboard if already logged in (but only if
   // the user's account is active; pending/disabled users get bounced to
   // the pending-approval screen instead).
   if (user && (
     path === '/login' ||
-    path === '/signup' ||
     path === '/forgot-password'
   )) {
     const url = request.nextUrl.clone()

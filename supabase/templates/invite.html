@@ -1,0 +1,42 @@
+<h2>You've been invited to wacrm</h2>
+
+<p>Hi,</p>
+
+<p>
+  An administrator has invited you to join their wacrm workspace.
+  Click the link below to accept the invite and set your password.
+  This link expires in 24 hours.
+</p>
+
+<p>
+  <a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=invite&next=/reset-password">
+    Accept invitation
+  </a>
+</p>
+
+<p>
+  If you weren't expecting this invitation, you can safely ignore
+  this email.
+</p>
+
+<!--
+  Why this template overrides the Supabase default:
+
+  Same reasoning as recovery.html. The default uses
+  `{{ .ConfirmationURL }}`, which expands to Supabase's
+  /auth/v1/verify endpoint that redirects with `?code=…` (PKCE).
+  PKCE requires a verifier stored on the requesting browser, which
+  doesn't exist for admin-issued invites — the email is generated
+  server-side, the recipient is on a fresh device with no prior
+  browser session.
+
+  Routing directly to /auth/callback with `token_hash` + `type`
+  bypasses /auth/v1/verify entirely; the callback consumes the
+  token via supabase.auth.verifyOtp({token_hash, type:'invite'}).
+  Works on any device, no cookies required.
+
+  Redirects to /reset-password (the same page used for recovery)
+  so the invitee can set their initial password. Functionally
+  identical to "first-time set password" so we don't bother with
+  a separate /accept-invite page yet.
+-->

@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { Loader2, ShieldAlert, Trash2 } from 'lucide-react';
+import { Loader2, ShieldAlert, Trash2, UserPlus } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -56,6 +58,7 @@ export function MembersManager() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Member | null>(null);
   const [deleting, setDeleting] = useState<Member | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   const ownProfileId = profile?.id;
 
@@ -165,6 +168,16 @@ export function MembersManager() {
 
   return (
     <>
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-sm text-slate-400">
+          {members.length} {members.length === 1 ? 'member' : 'members'}
+        </p>
+        <Button size="sm" onClick={() => setInviteOpen(true)}>
+          <UserPlus className="mr-2 h-4 w-4" />
+          Invite member
+        </Button>
+      </div>
+
       <Card className="border-slate-800 bg-slate-900">
         <CardContent className="p-0">
           <ul className="divide-y divide-slate-800">
@@ -268,6 +281,15 @@ export function MembersManager() {
         onSaved={(updated) => {
           setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
           setEditing(null);
+        }}
+      />
+
+      <InviteDialog
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+        onInvited={(member) => {
+          setMembers((prev) => [...prev, member]);
+          setInviteOpen(false);
         }}
       />
 
@@ -410,6 +432,207 @@ function ScopeEditor({
             Save
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Invite a new user by email. The admin picks role + initial scopes
+ * (scopes only matter for `member`; admins hold every scope). On
+ * submit, POSTs /api/admin/members/invite, which calls Supabase's
+ * inviteUserByEmail (emailing the invitee a token_hash link), then
+ * promotes the auto-created profile to active with the chosen role/
+ * scopes so the invitee can sign in immediately after setting their
+ * password.
+ */
+function InviteDialog({
+  open,
+  onClose,
+  onInvited,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onInvited: (m: Member) => void;
+}) {
+  const [email, setEmail] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [role, setRole] = useState<Role>('member');
+  const [scopes, setScopes] = useState<Set<Scope>>(new Set());
+  const [submitting, setSubmitting] = useState(false);
+
+  // Reset every time the dialog re-opens so a previous attempt's
+  // values don't leak into the next invite.
+  useEffect(() => {
+    if (open) {
+      setEmail('');
+      setFullName('');
+      setRole('member');
+      setScopes(new Set());
+    }
+  }, [open]);
+
+  const grouped = useMemo(() => {
+    const groups: Record<string, Scope[]> = {};
+    for (const s of ALL_SCOPES) {
+      const [g] = s.split('.');
+      (groups[g] ||= []).push(s);
+    }
+    return groups;
+  }, []);
+
+  const toggle = (s: Scope) => {
+    setScopes((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      return next;
+    });
+  };
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/admin/members/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim(),
+          full_name: fullName.trim() || undefined,
+          role,
+          // Admins implicitly hold every scope; don't send a list
+          // that the API would ignore anyway.
+          scopes: role === 'admin' ? [] : Array.from(scopes),
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error ?? 'Invite failed');
+      toast.success(`Invited ${json.member.email}`);
+      onInvited(json.member);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Invite failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto border-slate-800 bg-slate-900 text-slate-100 sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Invite a new member</DialogTitle>
+          <DialogDescription className="text-slate-400">
+            They&apos;ll receive an email to set their password. They can sign
+            in immediately after that with the role and scopes you choose
+            here — you can change either later.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={submit} className="space-y-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="invite-email" className="text-slate-300">
+              Email
+            </Label>
+            <Input
+              id="invite-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="teammate@example.com"
+              required
+              className="border-slate-700 bg-slate-800 text-white"
+            />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="invite-name" className="text-slate-300">
+              Display name <span className="text-slate-500">(optional)</span>
+            </Label>
+            <Input
+              id="invite-name"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Jane Doe"
+              className="border-slate-700 bg-slate-800 text-white"
+            />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label className="text-slate-300">Role</Label>
+            <div className="flex gap-2">
+              {(['member', 'admin'] as Role[]).map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setRole(r)}
+                  className={
+                    role === r
+                      ? 'flex-1 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-primary'
+                      : 'flex-1 rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800'
+                  }
+                >
+                  {r === 'admin' ? 'Admin (all access)' : 'Member (scoped)'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {role === 'member' && (
+            <div className="flex flex-col gap-2">
+              <Label className="text-slate-300">
+                Scopes
+                <span className="ml-2 text-xs text-slate-500">
+                  (members see/do nothing without these)
+                </span>
+              </Label>
+              <div className="space-y-3 rounded-lg border border-slate-800 p-3">
+                {Object.entries(grouped).map(([group, gs]) => (
+                  <div key={group}>
+                    <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      {group}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {gs.map((s) => {
+                        const enabled = scopes.has(s);
+                        return (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => toggle(s)}
+                            className={
+                              enabled
+                                ? 'rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-xs text-primary'
+                                : 'rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:bg-slate-800'
+                            }
+                          >
+                            {s}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              className="border-slate-700 text-slate-200"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting || !email.trim()}>
+              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Send invite
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
