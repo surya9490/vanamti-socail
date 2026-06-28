@@ -25,87 +25,64 @@ export async function middleware(request: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser()
 
-  const path = request.nextUrl.pathname
-
-  // Self-signup is disabled (deployment is invite-only). The /signup
-  // route no longer exists; redirect any stale link / bookmark to
-  // /login so users land somewhere sensible instead of a 404.
-  if (path === '/signup') {
-    const url = request.nextUrl.clone()
-    url.pathname = '/login'
-    return NextResponse.redirect(url)
+  // getUser() transparently refreshes an expired access token, which
+  // ROTATES the refresh token and writes the new cookies onto
+  // `supabaseResponse` via setAll() above. Any response we return in
+  // place of `supabaseResponse` (every redirect / JSON branch below)
+  // is a fresh object that does NOT carry those Set-Cookie headers, so
+  // the rotated token never reaches the browser. The next request then
+  // replays the old, now-consumed refresh token, the refresh fails, and
+  // the session wedges — the user gets a broken reload after idling and
+  // can only recover by manually clearing cookies (issue #288). Copy the
+  // refreshed cookies onto whatever response we hand back to fix that.
+  const withRefreshedCookies = <T extends NextResponse>(response: T): T => {
+    supabaseResponse.cookies.getAll().forEach((cookie) => {
+      response.cookies.set(cookie)
+    })
+    return response
   }
 
-  // Auth pages - redirect to dashboard if already logged in (but only if
-  // the user's account is active; pending/disabled users get bounced to
-  // the pending-approval screen instead).
+  // Auth pages - redirect to dashboard if already logged in.
+  // Exception: when an invite token is in the query string we
+  // send the already-signed-in user to /join/<token> instead so
+  // they can accept the invitation in one click. Without this,
+  // a forwarded invite link to someone who's already signed in
+  // would silently drop them on /dashboard.
   if (user && (
-    path === '/login' ||
-    path === '/forgot-password'
+    request.nextUrl.pathname === '/login' ||
+    request.nextUrl.pathname === '/signup' ||
+    request.nextUrl.pathname === '/forgot-password'
   )) {
     const url = request.nextUrl.clone()
-    url.pathname = '/dashboard'
-    return NextResponse.redirect(url)
+    const inviteToken = request.nextUrl.searchParams.get('invite')
+    if (
+      inviteToken &&
+      (request.nextUrl.pathname === '/login' ||
+        request.nextUrl.pathname === '/signup')
+    ) {
+      url.pathname = `/join/${encodeURIComponent(inviteToken)}`
+      url.search = ''
+    } else {
+      url.pathname = '/dashboard'
+      url.search = ''
+    }
+    return withRefreshedCookies(NextResponse.redirect(url))
   }
 
-  // Protected pages - redirect to login if not authenticated.
-  const protectedPaths = [
-    '/dashboard', '/inbox', '/contacts', '/pipelines',
-    '/broadcasts', '/automations', '/flows', '/settings',
-  ]
-  const isProtectedPath = protectedPaths.some(p => path.startsWith(p))
-  if (!user && isProtectedPath) {
+  // Protected pages - redirect to login if not authenticated
+  const protectedPaths = ['/dashboard', '/inbox', '/contacts', '/pipelines', '/broadcasts', '/automations', '/settings']
+  if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
-    return NextResponse.redirect(url)
+    return withRefreshedCookies(NextResponse.redirect(url))
   }
 
-  // Pending / disabled gating. Authed users with status != 'active' are
-  // shunted to a "waiting for admin approval" screen. We avoid touching
-  // the DB on every static asset hit by only looking up profile.status
-  // when the path actually targets the app or its API.
-  if (user && (isProtectedPath || path.startsWith('/api/')) && !path.startsWith('/api/whatsapp/webhook') && path !== '/pending-approval') {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('status')
-      .eq('user_id', user.id)
-      .maybeSingle()
-
-    const status = profile?.status
-
-    if (status === 'pending' || status === 'disabled') {
-      // Block API access outright for non-active users; the UI gets a
-      // redirect to the approval page.
-      if (path.startsWith('/api/')) {
-        return NextResponse.json(
-          { error: status === 'pending' ? 'Account pending approval' : 'Account disabled' },
-          { status: 403 },
-        )
-      }
-      const url = request.nextUrl.clone()
-      url.pathname = '/pending-approval'
-      return NextResponse.redirect(url)
-    }
-  }
-
-  // If a fully active user hits /pending-approval, send them home.
-  if (user && path === '/pending-approval') {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('status')
-      .eq('user_id', user.id)
-      .maybeSingle()
-    if (profile?.status === 'active') {
-      const url = request.nextUrl.clone()
-      url.pathname = '/dashboard'
-      return NextResponse.redirect(url)
-    }
-  }
-
-  // API routes that need auth (not webhooks).
-  if (!user && path.startsWith('/api/whatsapp/') &&
-      !path.includes('/webhook')) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // API routes that need auth (not webhooks)
+  if (!user && request.nextUrl.pathname.startsWith('/api/whatsapp/') &&
+      !request.nextUrl.pathname.includes('/webhook')) {
+    return withRefreshedCookies(
+      NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    )
   }
 
   return supabaseResponse

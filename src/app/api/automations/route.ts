@@ -7,12 +7,13 @@ import {
   validateStepsForActivation,
   validateTriggerForActivation,
 } from '@/lib/automations/validate'
-import { requireScope } from '@/lib/auth/rbac'
 
 export async function GET() {
-  const guard = await requireScope('automations.read')
-  if (!guard.ok) return guard.response
   const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { data, error } = await supabase
     .from('automations')
@@ -23,9 +24,27 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const guard = await requireScope('automations.manage')
-  if (!guard.ok) return guard.response
-  const user = { id: guard.profile.user_id }
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // Resolve the caller's account_id — `automations.account_id` is NOT
+  // NULL post-017, so an INSERT without it trips the not-null constraint
+  // even though the admin client bypasses RLS.
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('account_id')
+    .eq('user_id', user.id)
+    .single()
+  const accountId = profile?.account_id as string | undefined
+  if (!accountId) {
+    return NextResponse.json(
+      { error: 'Your profile is not linked to an account.' },
+      { status: 403 },
+    )
+  }
 
   const body = await request.json().catch(() => null)
   if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
@@ -80,6 +99,7 @@ export async function POST(request: Request) {
     .from('automations')
     .insert({
       user_id: user.id,
+      account_id: accountId,
       name: effectiveName,
       description: effectiveDescription ?? null,
       trigger_type: effectiveTriggerType,

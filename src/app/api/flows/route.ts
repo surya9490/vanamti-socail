@@ -2,17 +2,37 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { getFlowTemplate } from '@/lib/flows/templates'
-import { requireScope } from '@/lib/auth/rbac'
 
 /**
- * GET /api/flows — list the org's flows (any member with flows.read).
- * POST /api/flows — create a new (draft) flow (requires flows.manage).
+ * GET /api/flows — list the caller's flows.
+ * POST /api/flows — create a new (draft) flow.
+ *
+ * Available to every authenticated user. The previous per-account
+ * beta gate was removed when Flows went to soft-GA; the UI still
+ * shows a "Beta" label so users know the surface is young, but the
+ * routes themselves are open.
  */
 
-export async function GET() {
-  const guard = await requireScope('flows.read')
-  if (!guard.ok) return guard.response
+async function requireUser(): Promise<
+  | { ok: true; userId: string; supabase: Awaited<ReturnType<typeof createClient>> }
+  | { ok: false; status: number; body: { error: string } }
+> {
   const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return { ok: false, status: 401, body: { error: 'Unauthorized' } }
+  }
+  return { ok: true, userId: user.id, supabase }
+}
+
+export async function GET() {
+  const guard = await requireUser()
+  if (!guard.ok) {
+    return NextResponse.json(guard.body, { status: guard.status })
+  }
+  const { supabase } = guard
 
   const { data, error } = await supabase
     .from('flows')
@@ -25,9 +45,27 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const guard = await requireScope('flows.manage')
-  if (!guard.ok) return guard.response
-  const userId = guard.profile.user_id
+  const guard = await requireUser()
+  if (!guard.ok) {
+    return NextResponse.json(guard.body, { status: guard.status })
+  }
+  const { userId, supabase } = guard
+
+  // Resolve the caller's account_id — `flows.account_id` is NOT NULL
+  // post-017, so an INSERT without it trips the not-null constraint
+  // even though the admin client below bypasses RLS.
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('account_id')
+    .eq('user_id', userId)
+    .single()
+  const accountId = profile?.account_id as string | undefined
+  if (!accountId) {
+    return NextResponse.json(
+      { error: 'Your profile is not linked to an account.' },
+      { status: 403 },
+    )
+  }
 
   const body = (await request.json().catch(() => null)) as
     | {
@@ -63,6 +101,7 @@ export async function POST(request: Request) {
       .from('flows')
       .insert({
         user_id: userId,
+        account_id: accountId,
         name: body.name?.trim() || template.name,
         description: template.description,
         status: 'draft',
@@ -111,6 +150,7 @@ export async function POST(request: Request) {
     .from('flows')
     .insert({
       user_id: userId,
+      account_id: accountId,
       name: body.name.trim(),
       description: body.description ?? null,
       status: 'draft',

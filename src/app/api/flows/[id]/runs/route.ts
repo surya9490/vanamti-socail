@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { requireScope } from '@/lib/auth/rbac'
 
 /**
  * GET /api/flows/[id]/runs
@@ -23,9 +22,13 @@ export async function GET(
 ) {
   const { id } = await context.params
 
-  const guard = await requireScope('flows.read')
-  if (!guard.ok) return guard.response
   const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
 
   // Confirm flow exists + caller owns it (RLS does this) before doing
   // the run query — gives us a clean 404 instead of empty array.

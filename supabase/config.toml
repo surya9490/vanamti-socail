@@ -25,21 +25,25 @@ additional_redirect_urls = [
   "http://localhost:3000/**",
 ]
 
-# Disable public self-signup — this deployment is invite-only.
-# Admins create users via POST /api/admin/members/invite (which uses
-# the service role + supabase.auth.admin.inviteUserByEmail). With
-# this flag off, supabase.auth.signUp() from the client is rejected,
-# so even if the /signup page were reached it couldn't create an
-# account.
-enable_signup = false
+# Supabase signup MUST be enabled — upstream's invitation flow
+# (added by migrations 017–019 and POST /api/invitations/[token]/redeem)
+# creates the invitee's account via the standard signUp() path, then
+# atomically moves them from their personal account into the
+# inviter's. Disabling signup at the auth layer would break the
+# entire invitation flow.
+#
+# The "admin-only invite" behaviour is enforced ONE LAYER UP, in the
+# app: /signup refuses to render its form unless an `?invite=<token>`
+# query param is present (see src/app/(auth)/signup/page.tsx). That
+#'s the only entrypoint that ever reaches signUp() — /login no
+# longer advertises a "create account" link.
+enable_signup = true
 
 # --- Pinned defaults restored from the previous push ---
 
 [auth.email]
-# Same intent at the email-provider level: no self-serve email
-# signup. Required in addition to [auth].enable_signup because
-# Supabase checks both.
-enable_signup = false
+# Mirrors [auth].enable_signup — Supabase checks both flags.
+enable_signup = true
 double_confirm_changes = true
 # Invited users go through a verifyOtp(type:'invite') flow that
 # already establishes a valid session — they don't need an

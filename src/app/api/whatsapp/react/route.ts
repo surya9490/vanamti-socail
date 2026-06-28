@@ -8,7 +8,6 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit';
-import { requireScope } from '@/lib/auth/rbac';
 
 /**
  * POST /api/whatsapp/react
@@ -21,14 +20,35 @@ import { requireScope } from '@/lib/auth/rbac';
  */
 export async function POST(request: Request) {
   try {
-    const guard = await requireScope('inbox.write');
-    if (!guard.ok) return guard.response;
     const supabase = await createClient();
-    const user = { id: guard.profile.user_id };
+
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
     const limit = checkRateLimit(`react:${user.id}`, RATE_LIMITS.react);
     if (!limit.success) {
       return rateLimitResponse(limit);
+    }
+
+    // Resolve the caller's account_id so conversation + whatsapp_config
+    // lookups work for teammates who didn't author the rows directly.
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('account_id')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    const accountId = profile?.account_id as string | undefined;
+    if (!accountId) {
+      return NextResponse.json(
+        { error: 'Your profile is not linked to an account.' },
+        { status: 403 },
+      );
     }
 
     const body = await request.json();
@@ -64,11 +84,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Org-shared: RLS gates this on inbox.write; no per-user filter.
     const { data: conversation, error: convError } = await supabase
       .from('conversations')
-      .select('id, user_id, contact:contacts(phone)')
+      .select('id, account_id, contact:contacts(phone)')
       .eq('id', targetMessage.conversation_id)
+      .eq('account_id', accountId)
       .maybeSingle();
 
     if (convError || !conversation) {
@@ -88,13 +108,12 @@ export async function POST(request: Request) {
       );
     }
 
-    // Org-wide single config. See comment in /api/whatsapp/send.
+    // WhatsApp config + access token. Account-scoped post-multi-user.
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
       .select('phone_number_id, access_token')
-      .eq('status', 'connected')
-      .limit(1)
-      .maybeSingle();
+      .eq('account_id', accountId)
+      .single();
 
     if (configError || !config) {
       return NextResponse.json(

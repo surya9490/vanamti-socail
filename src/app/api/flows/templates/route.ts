@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 import { listFlowTemplates } from '@/lib/flows/templates'
-import { requireScope } from '@/lib/auth/rbac'
 
 /**
  * GET /api/flows/templates
@@ -9,10 +9,17 @@ import { requireScope } from '@/lib/auth/rbac'
  * icon hint + node_count) so the New-flow dialog can render cards
  * without bundling the full template payloads client-side. Bodies
  * are fetched only on actual clone via POST /api/flows.
+ *
+ * Available to any signed-in user. Flows is in soft-GA.
  */
 export async function GET() {
-  const guard = await requireScope('flows.read')
-  if (!guard.ok) return guard.response
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   // Shallow shape so the client gallery doesn't have to know about
   // the full node tree.
   const templates = listFlowTemplates().map((t) => ({
