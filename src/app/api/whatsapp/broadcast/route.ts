@@ -15,10 +15,14 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
+import {
+  loadOptedOutPhoneSuffixes,
+  isPhoneOptedOut,
+} from '@/lib/contacts/opt-out'
 
 interface BroadcastResult {
   phone: string
-  status: 'sent' | 'failed'
+  status: 'sent' | 'failed' | 'skipped'
   whatsapp_message_id?: string
   error?: string
 }
@@ -175,11 +179,28 @@ export async function POST(request: Request) {
     }
     const templateRow = rawTemplateRow ?? null
 
+    // Hard opt-out filter at SEND time — not in the audience picker —
+    // so a stale saved segment can never message someone who replied
+    // STOP after the list was built. Broadcasts are marketing by
+    // definition, so opted-out contacts are always excluded here.
+    const optedOutSuffixes = await loadOptedOutPhoneSuffixes(supabase, accountId)
+
     const results: BroadcastResult[] = []
     let sentCount = 0
     let failedCount = 0
+    let skippedCount = 0
 
     for (const recipient of recipients) {
+      if (isPhoneOptedOut(optedOutSuffixes, recipient.phone)) {
+        results.push({
+          phone: recipient.phone,
+          status: 'skipped',
+          error: 'Contact has opted out of marketing messages (STOP)',
+        })
+        skippedCount++
+        continue
+      }
+
       const sanitized = sanitizePhoneForMeta(recipient.phone)
 
       if (!isValidE164(sanitized)) {
@@ -251,6 +272,7 @@ export async function POST(request: Request) {
       total: recipients.length,
       sent: sentCount,
       failed: failedCount,
+      skipped: skippedCount,
       results,
     })
   } catch (error) {

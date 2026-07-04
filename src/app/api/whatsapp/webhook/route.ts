@@ -1,9 +1,15 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
+import { getMediaUrl, downloadMedia, sendTextMessage } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
+import {
+  matchOptOutKeyword,
+  setContactOptOut,
+  OPT_OUT_CONFIRMATION,
+  OPT_IN_CONFIRMATION,
+} from '@/lib/contacts/opt-out'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
@@ -275,7 +281,9 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
           // inserts that need it for NOT NULL FK compliance. Always
           // the admin who saved the WhatsApp config.
           config.user_id,
-          decryptedAccessToken
+          decryptedAccessToken,
+          // Needed to send the STOP/START confirmation reply.
+          config.phone_number_id
         )
       }
     }
@@ -509,7 +517,8 @@ async function processMessage(
   // (contacts, conversations). Always the admin who saved the
   // WhatsApp config; the choice is arbitrary post-017 but stable.
   configOwnerUserId: string,
-  accessToken: string
+  accessToken: string,
+  phoneNumberId: string
 ) {
   const senderPhone = normalizePhone(message.from)
   const contactName = contact.profile.name
@@ -635,6 +644,78 @@ async function processMessage(
   // so the broadcast's `replied_count` advances (via the aggregate
   // trigger installed in migration 003).
   await flagBroadcastReplyIfAny(accountId, contactRecord.id)
+
+  // ============================================================
+  // Marketing opt-out (STOP) / opt-in (START).
+  //
+  // Detected on exact-keyword texts and on opt-out button payloads.
+  // When matched we flip contacts.opted_out_at, confirm to the
+  // customer (free-form — their message just opened the 24h window),
+  // and RETURN EARLY: flows and automations must never react to a
+  // STOP with more messaging.
+  // ============================================================
+  const optOutAction = matchOptOutKeyword(
+    contentText ?? message.text?.body,
+    interactiveReplyId,
+  )
+  if (optOutAction) {
+    const { error: optErr } = await setContactOptOut(
+      supabaseAdmin(),
+      contactRecord.id,
+      optOutAction,
+    )
+    if (optErr) {
+      console.error('[opt-out] failed to update contact flag:', optErr.message)
+      // Fall through — still confirm to the customer; the next STOP
+      // (or a manual toggle) can repair the flag.
+    }
+
+    const confirmation =
+      optOutAction === 'stop' ? OPT_OUT_CONFIRMATION : OPT_IN_CONFIRMATION
+
+    try {
+      const sendResult = await sendTextMessage({
+        phoneNumberId,
+        accessToken,
+        to: senderPhone,
+        text: confirmation,
+      })
+
+      // Mirror the confirmation into the inbox so agents see the
+      // exchange. sender_type 'bot' — it wasn't a human reply.
+      const { error: botMsgErr } = await supabaseAdmin().from('messages').insert({
+        conversation_id: conversation.id,
+        sender_type: 'bot',
+        content_type: 'text',
+        content_text: confirmation,
+        message_id: sendResult.messageId,
+        status: 'sent',
+      })
+      if (botMsgErr) {
+        console.error('[opt-out] failed to insert confirmation message:', botMsgErr.message)
+      }
+      await supabaseAdmin()
+        .from('conversations')
+        .update({
+          last_message_text: confirmation,
+          last_message_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', conversation.id)
+    } catch (err) {
+      // Confirmation is best-effort — the flag is already set, which
+      // is the part that actually protects the customer.
+      console.error(
+        '[opt-out] confirmation send failed:',
+        err instanceof Error ? err.message : err,
+      )
+    }
+
+    console.log(
+      `[opt-out] contact ${contactRecord.id} ${optOutAction === 'stop' ? 'opted out' : 'opted back in'}`,
+    )
+    return
+  }
 
   // ============================================================
   // Flow runner dispatch.
