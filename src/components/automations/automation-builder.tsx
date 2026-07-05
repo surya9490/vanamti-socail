@@ -30,6 +30,7 @@ import {
   Loader2,
   ArrowDown,
   ArrowUp,
+  PackageSearch,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -98,6 +99,7 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
   wait: { label: "Wait", icon: Hourglass, border: "border-l-border" },
   condition: { label: "Condition (If/Else)", icon: GitBranch, border: "border-l-amber-500" },
   send_webhook: { label: "Send Webhook", icon: Webhook, border: "border-l-primary" },
+  order_lookup: { label: "Order Status Lookup", icon: PackageSearch, border: "border-l-primary" },
   close_conversation: { label: "Close Conversation", icon: CircleSlash, border: "border-l-primary" },
 }
 
@@ -112,6 +114,7 @@ const ADDABLE_STEPS: AutomationStepType[] = [
   "wait",
   "condition",
   "send_webhook",
+  "order_lookup",
   "close_conversation",
 ]
 
@@ -159,6 +162,8 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
       return { subject: "tag_presence", operand: "", value: "" }
     case "send_webhook":
       return { url: "", headers: {}, body_template: "" }
+    case "order_lookup":
+      return {}
     case "close_conversation":
       return {}
     default:
@@ -1242,6 +1247,17 @@ function StepEditor({
           </FieldBlock>
         </>
       )
+    case "order_lookup":
+      return (
+        <p className="text-xs text-muted-foreground">
+          Reads the order number from the customer&apos;s message, checks the
+          order in the Vanamati store app (phone-verified, so customers can
+          only track their own orders) and replies with the live status. Pair
+          with a Keyword Match trigger like &quot;track&quot; or &quot;order
+          status&quot;. No configuration needed — the connection comes from
+          the server&apos;s VANAMATI_APP_URL / VANAMATI_ORDER_STATUS_KEY.
+        </p>
+      )
     case "close_conversation":
       return (
         <p className="text-xs text-muted-foreground">
@@ -1280,6 +1296,8 @@ function previewFor(step: BuilderStep): string {
       return `when ${step.step_config.subject ?? "?"}`
     case "send_webhook":
       return (step.step_config.url as string) || "no url"
+    case "order_lookup":
+      return "replies with live order status"
     default:
       return ""
   }

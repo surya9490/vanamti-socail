@@ -16,6 +16,13 @@ import type {
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate } from './meta-send'
+import {
+  orderTrackingConfigured,
+  extractOrderNumber,
+  fetchOrderStatusReply,
+  ASK_FOR_ORDER_NUMBER,
+  LOOKUP_UNAVAILABLE,
+} from '@/lib/orders/order-tracking'
 
 // ------------------------------------------------------------
 // Public API
@@ -522,6 +529,46 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         status: 'open',
       })
       return 'deal created'
+    }
+
+    case 'order_lookup': {
+      // Order Status Lookup (Vanamati) — see lib/orders/order-tracking.ts.
+      // Pair with a Keyword Match trigger ("track", "order status", …);
+      // the trigger filters intent, this step does the work.
+      if (!args.contactId) throw new Error('order_lookup needs a contact')
+      if (!orderTrackingConfigured()) {
+        throw new Error(
+          'order_lookup is not configured — set VANAMATI_APP_URL and VANAMATI_ORDER_STATUS_KEY',
+        )
+      }
+      const { data: lookupContact } = await db
+        .from('contacts')
+        .select('phone')
+        .eq('id', args.contactId)
+        .eq('account_id', args.automation.account_id)
+        .maybeSingle()
+      const contactPhone = (lookupContact as { phone?: string } | null)?.phone
+      if (!contactPhone) throw new Error('order_lookup: contact has no phone')
+
+      const orderNumber = extractOrderNumber(args.context.message_text ?? '')
+      const replyText = orderNumber
+        ? (await fetchOrderStatusReply({
+            orderNumber,
+            senderPhone: contactPhone,
+          })) ?? LOOKUP_UNAVAILABLE
+        : ASK_FOR_ORDER_NUMBER
+
+      const conversationId = await resolveConversationId(args)
+      await engineSendText({
+        accountId: args.automation.account_id,
+        userId: args.automation.user_id,
+        conversationId,
+        contactId: args.contactId,
+        text: replyText,
+      })
+      return orderNumber
+        ? `order ${orderNumber} status sent`
+        : 'asked for order number'
     }
 
     case 'send_webhook': {

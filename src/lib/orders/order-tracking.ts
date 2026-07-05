@@ -1,0 +1,83 @@
+// ============================================================
+// Order-tracking lookup — powers the `order_lookup` AUTOMATION step.
+//
+// Merchants compose it in the Automations UI, e.g.:
+//   Trigger: Keyword Match ["track", "order status", "where is my order"]
+//   Step:    Order Status Lookup (Vanamati)
+//
+// The step extracts the order number from the triggering message,
+// calls the Vanamati Shopify app's order-status endpoint with the
+// CONTACT'S phone (the app refuses mismatched phones, so customers
+// can only track their own orders), and replies with the ready-made
+// message the app returns.
+//
+// Config (both required to activate; unset = step fails with a clear
+// log message):
+//   VANAMATI_APP_URL           e.g. https://app.vanamati.com
+//   VANAMATI_ORDER_STATUS_KEY  dedicated token — matches the app's
+//                              ORDER_STATUS_API_KEY (deliberately NOT
+//                              the app's admin master key: this token
+//                              can do exactly one thing)
+// ============================================================
+
+const VANAMATI_APP_URL = (process.env.VANAMATI_APP_URL || '').replace(/\/$/, '')
+const VANAMATI_ORDER_STATUS_KEY = process.env.VANAMATI_ORDER_STATUS_KEY || ''
+
+export function orderTrackingConfigured(): boolean {
+  return Boolean(VANAMATI_APP_URL && VANAMATI_ORDER_STATUS_KEY)
+}
+
+/**
+ * Pull an order number out of a message that already passed the
+ * merchant's keyword trigger. Permissive on purpose (the trigger did
+ * the intent filtering): first #-prefixed number wins, else the first
+ * standalone 3-8 digit number.
+ */
+export function extractOrderNumber(text: string | null | undefined): string | null {
+  if (!text) return null
+  const hash = text.match(/#\s*(\d{3,8})\b/)
+  if (hash) return hash[1]
+  const bare = text.match(/\b(\d{3,8})\b/)
+  return bare ? bare[1] : null
+}
+
+export const ASK_FOR_ORDER_NUMBER =
+  'Happy to check! Please send your order number (it’s in your confirmation email), e.g. "track 1024".'
+
+export const LOOKUP_UNAVAILABLE =
+  'We couldn’t check that right now — please try again in a few minutes.'
+
+interface OrderStatusResponse {
+  found: boolean
+  message: string
+}
+
+/**
+ * Ask the Vanamati app for the order status. Returns the ready-to-send
+ * reply text, or null when the lookup could not run (network failure /
+ * malformed response). Callers decide the fallback copy.
+ */
+export async function fetchOrderStatusReply(params: {
+  orderNumber: string
+  senderPhone: string
+}): Promise<string | null> {
+  if (!orderTrackingConfigured()) return null
+  try {
+    const url =
+      `${VANAMATI_APP_URL}/api/order-status` +
+      `?order=${encodeURIComponent(params.orderNumber)}` +
+      `&phone=${encodeURIComponent(params.senderPhone)}`
+    const resp = await fetch(url, {
+      headers: { 'x-api-key': VANAMATI_ORDER_STATUS_KEY },
+    })
+    const json = (await resp.json().catch(() => null)) as OrderStatusResponse | null
+    if (!json || typeof json.message !== 'string' || !json.message) return null
+    return json.message
+  } catch (error) {
+    console.error(
+      '[order-tracking] lookup failed:',
+      error instanceof Error ? error.message : error,
+    )
+    return null
+  }
+}

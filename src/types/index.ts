@@ -388,6 +388,7 @@ export type AutomationStepType =
   | 'wait'
   | 'condition'
   | 'send_webhook'
+  | 'order_lookup'
   | 'close_conversation';
 
 export type AutomationLogStatus = 'success' | 'partial' | 'failed';
@@ -479,6 +480,15 @@ export interface SendWebhookStepConfig {
   body_template?: string;
 }
 
+/**
+ * Order Status Lookup (Vanamati): extracts an order number from the
+ * triggering message, asks the Vanamati Shopify app for that order's
+ * status (phone-verified server-side), and replies with the result.
+ * No per-step config — the endpoint + token come from env
+ * (VANAMATI_APP_URL / VANAMATI_ORDER_STATUS_KEY).
+ */
+export type OrderLookupStepConfig = Record<string, never>;
+
 export type AutomationStepConfig =
   | SendMessageStepConfig
   | SendTemplateStepConfig
@@ -489,6 +499,7 @@ export type AutomationStepConfig =
   | WaitStepConfig
   | ConditionStepConfig
   | SendWebhookStepConfig
+  | OrderLookupStepConfig
   | Record<string, never>
   | Record<string, unknown>;
 
