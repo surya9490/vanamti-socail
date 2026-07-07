@@ -135,6 +135,15 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
     case 'close_conversation':
       // No config required.
       break
+    case 'order_lookup':
+      // No user-facing config — the step reads VANAMATI_APP_URL /
+      // VANAMATI_ORDER_STATUS_KEY from the server env and the order
+      // number is extracted from the triggering message at runtime.
+      // Was missing from this switch since the step was introduced,
+      // so any automation containing an Order Status Lookup step
+      // failed activation with "unknown step type: order_lookup"
+      // even though the engine + builder both understood it.
+      break
     default:
       issues.push({ path, message: `unknown step type: ${step.step_type}` })
   }
