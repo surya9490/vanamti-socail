@@ -173,6 +173,36 @@ export interface SetTagNodeConfig {
   next_node_key: string;
 }
 
+/**
+ * Looks up an order's status via the Vanamati Shopify app and replies
+ * with the status text, then auto-advances. The flow twin of the
+ * automations "Order Status Lookup" step
+ * (src/lib/automations/engine.ts) — both share the Vanamati client in
+ * src/lib/orders/order-tracking.ts.
+ *
+ * The order number is resolved in priority order:
+ *   1. `order_var` — a flow var captured by an upstream collect_input.
+ *   2. the message that triggered the flow (seeded into
+ *      `flow_runs.vars._trigger_text` at run start).
+ *   3. neither → the customer is asked to send their order number.
+ *
+ * The contact's phone (not any typed number) is sent to the app, which
+ * refuses mismatched phones — a customer can only track their own
+ * orders. Endpoint + token come from env (VANAMATI_APP_URL /
+ * VANAMATI_ORDER_STATUS_KEY); when unset the node replies with a
+ * graceful "couldn't check right now" and still advances.
+ */
+export interface OrderLookupNodeConfig {
+  /**
+   * Optional. Name of a `flow_runs.vars` key (captured by an upstream
+   * collect_input) holding the order number. Tried before the trigger
+   * message. Empty = fall back to the trigger message.
+   */
+  order_var?: string;
+  /** Auto-advance target after the status reply is sent. */
+  next_node_key: string;
+}
+
 // Terminal nodes carry no config — they just stop the run.
 export type EndNodeConfig = Record<string, never>;
 
@@ -193,6 +223,7 @@ export type FlowNodeConfig =
   | { node_type: "collect_input"; config: CollectInputNodeConfig }
   | { node_type: "condition"; config: ConditionNodeConfig }
   | { node_type: "set_tag"; config: SetTagNodeConfig }
+  | { node_type: "order_lookup"; config: OrderLookupNodeConfig }
   | { node_type: "handoff"; config: HandoffNodeConfig }
   | { node_type: "end"; config: EndNodeConfig };
 

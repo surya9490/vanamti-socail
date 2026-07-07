@@ -41,6 +41,12 @@ import {
 } from "./meta-send";
 import { decideFallback, resolveFallbackPolicy } from "./fallback";
 import {
+  ASK_FOR_ORDER_NUMBER,
+  LOOKUP_UNAVAILABLE,
+  extractOrderNumber,
+  fetchOrderStatusReply,
+} from "@/lib/orders/order-tracking";
+import {
   type CollectInputNodeConfig,
   type ConditionNodeConfig,
   type DispatchInboundInput,
@@ -48,6 +54,7 @@ import {
   type FlowNodeRow,
   type FlowRow,
   type FlowRunRow,
+  type OrderLookupNodeConfig,
   type ParsedInbound,
   type SendButtonsNodeConfig,
   type SendListNodeConfig,
@@ -57,6 +64,37 @@ import {
   type StartNodeConfig,
   type KeywordTriggerConfig,
 } from "./types";
+
+/**
+ * Reserved `flow_runs.vars` key holding the text of the message that
+ * triggered the run. Seeded at run start ONLY for flows that contain an
+ * order_lookup node (see startNewRun) so an order_lookup can fall back
+ * to extracting the order number from it — mirroring the automations
+ * engine, which reads `context.message_text` directly. Underscore
+ * prefix keeps it clear of user-chosen collect_input var keys.
+ */
+export const TRIGGER_TEXT_VAR = "_trigger_text";
+
+/**
+ * Resolve the order number an `order_lookup` node should look up, from
+ * the run's vars. Priority: the configured `order_var` (captured by an
+ * upstream collect_input) → the seeded trigger message
+ * (`_trigger_text`). Returns null when neither yields a recognisable
+ * order number. Pure + exported so engine.test.ts can exercise the
+ * priority logic without a Supabase / Meta mock — same pattern as
+ * matchReplyId / evaluateConditionPredicate.
+ */
+export function resolveOrderLookupNumber(
+  cfg: { order_var?: string },
+  vars: Record<string, unknown>,
+): string | null {
+  const fromVar =
+    cfg.order_var && vars[cfg.order_var] != null
+      ? String(vars[cfg.order_var])
+      : "";
+  const fromTrigger = String(vars[TRIGGER_TEXT_VAR] ?? "");
+  return extractOrderNumber(fromVar || fromTrigger);
+}
 
 // ============================================================
 // Pure helpers — extracted so engine.test.ts can exercise them
@@ -116,7 +154,8 @@ export function isAutoAdvancing(node_type: string): boolean {
     node_type === "send_message" ||
     node_type === "send_media" ||
     node_type === "condition" ||
-    node_type === "set_tag"
+    node_type === "set_tag" ||
+    node_type === "order_lookup"
   );
 }
 
@@ -633,6 +672,71 @@ async function advanceFromNodeKey(
       currentKey = cfg.next_node_key;
       continue;
     }
+    if (node.node_type === "order_lookup") {
+      // Order Status Lookup (Vanamati) — the flow twin of the
+      // automations step. Resolves the order number (configured var →
+      // trigger message → ask), verifies via the contact's own phone,
+      // and sends the app's ready-made reply. Never asks Meta to
+      // interpret anything: it just sends text and advances.
+      const cfg = node.config as unknown as OrderLookupNodeConfig;
+      try {
+        // The contact's stored phone — NOT any number the customer
+        // typed. The Vanamati app refuses mismatched phones, so a
+        // customer can only ever track their own order.
+        const { data: lookupContact } = await db
+          .from("contacts")
+          .select("phone")
+          .eq("id", run.contact_id!)
+          .eq("account_id", run.account_id)
+          .maybeSingle();
+        const contactPhone =
+          (lookupContact as { phone?: string } | null)?.phone ?? null;
+
+        // Priority: configured var (from a prior collect_input) → the
+        // message that triggered the flow → nothing. extractOrderNumber
+        // normalises "#1024" / "order 1024" down to the bare number.
+        const orderNumber = resolveOrderLookupNumber(cfg, run.vars);
+
+        let replyText: string;
+        if (!contactPhone) {
+          // No phone on file — we can't verify ownership, so we can't
+          // look anything up. Fail soft rather than strand the run.
+          replyText = LOOKUP_UNAVAILABLE;
+        } else if (!orderNumber) {
+          replyText = ASK_FOR_ORDER_NUMBER;
+        } else {
+          replyText =
+            (await fetchOrderStatusReply({
+              orderNumber,
+              senderPhone: contactPhone,
+            })) ?? LOOKUP_UNAVAILABLE;
+        }
+
+        const { whatsapp_message_id } = await engineSendText({
+          accountId: run.account_id,
+          userId: run.user_id,
+          conversationId: run.conversation_id!,
+          contactId: run.contact_id!,
+          text: replyText,
+        });
+        await logEvent(db, run.id, "message_sent", node.node_key, {
+          node_type: "order_lookup",
+          whatsapp_message_id,
+          // Booleans only — never log the raw order number / phone.
+          resolved_order: Boolean(orderNumber),
+          had_phone: Boolean(contactPhone),
+        });
+      } catch (err) {
+        await logEvent(db, run.id, "error", node.node_key, {
+          reason: "order_lookup_failed",
+          detail: err instanceof Error ? err.message : String(err),
+        });
+        await endRun(db, run.id, "failed", "order_lookup_failed");
+        return { outcome: "completed" };
+      }
+      currentKey = cfg.next_node_key;
+      continue;
+    }
     if (node.node_type === "collect_input") {
       // Send the prompt and suspend. Customer's next TEXT reply will
       // wake us up via handleReplyForActiveRun's collect_input branch.
@@ -1054,6 +1158,19 @@ async function startNewRun(
   input: DispatchInboundInput,
   nodes: Map<string, FlowNodeRow>,
 ): Promise<DispatchInboundResult> {
+  // Seed the triggering message text so an order_lookup node can fall
+  // back to it. Persisted ONLY when the flow actually contains an
+  // order_lookup node — we don't want raw inbound text sitting in
+  // flow_runs.vars for flows that never read it (same don't-persist-
+  // raw-text stance handleReplyForActiveRun documents).
+  const seedVars: Record<string, unknown> = {};
+  if (
+    input.message.kind === "text" &&
+    [...nodes.values()].some((n) => n.node_type === "order_lookup")
+  ) {
+    seedVars[TRIGGER_TEXT_VAR] = input.message.text;
+  }
+
   // INSERT — partial unique index `idx_one_active_run_per_contact`
   // catches concurrent inserts with 23505. We catch and return as
   // consumed:true (the parallel webhook handles it).
@@ -1073,6 +1190,7 @@ async function startNewRun(
       conversation_id: input.conversationId,
       status: "active",
       current_node_key: flow.entry_node_id,
+      vars: seedVars,
     })
     .select("*")
     .maybeSingle();

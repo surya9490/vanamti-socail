@@ -701,6 +701,43 @@ function validateNode(
       break;
     }
 
+    case "order_lookup": {
+      const cfg = node.config as { order_var?: string; next_node_key?: string };
+      // order_var is optional (the node falls back to the trigger
+      // message), but when set it must be a valid vars identifier —
+      // same rule collect_input enforces for var_key.
+      if (
+        cfg.order_var &&
+        !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(cfg.order_var)
+      ) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "order_var",
+          message: `order_var "${cfg.order_var}" must be alphanumeric+underscore and start with a letter or underscore.`,
+        });
+      }
+      if (!cfg.next_node_key) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: "Order-lookup node must point to a next node.",
+        });
+      } else if (!knownKeys.has(cfg.next_node_key)) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: `Order-lookup points to non-existent node "${cfg.next_node_key}".`,
+        });
+      }
+      break;
+    }
+
     case "handoff":
     case "end":
       // Terminal nodes have no outgoing edges; nothing to validate
@@ -751,7 +788,8 @@ function outgoingEdges(node: NodeInput): string[] {
     case "send_message":
     case "send_media":
     case "collect_input":
-    case "set_tag": {
+    case "set_tag":
+    case "order_lookup": {
       const cfg = node.config as { next_node_key?: string };
       return cfg.next_node_key ? [cfg.next_node_key] : [];
     }

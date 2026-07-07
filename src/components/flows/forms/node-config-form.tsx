@@ -188,6 +188,47 @@ export function NodeConfigForm({
         />
       );
 
+    case "order_lookup":
+      return (
+        <>
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              Order number variable (optional)
+            </label>
+            <Input
+              value={(cfg as { order_var?: string }).order_var ?? ""}
+              onChange={(e) =>
+                onUpdateConfig({
+                  order_var: e.target.value.replace(/[^a-zA-Z0-9_]/g, ""),
+                })
+              }
+              placeholder="e.g. order_number (from a Collect input step)"
+              className="bg-muted font-mono text-xs"
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Reads the order number from this{" "}
+              <code className="rounded bg-muted px-1">
+                {"{{vars."}
+                {(cfg as { order_var?: string }).order_var || "…"}
+                {"}}"}
+              </code>{" "}
+              variable — pair it with an upstream Collect input node. Leave
+              empty to use the message that triggered the flow. If neither
+              yields an order number, the customer is asked to send it. The
+              lookup uses the contact&apos;s own phone and your Vanamati store
+              (needs VANAMATI_APP_URL + VANAMATI_ORDER_STATUS_KEY).
+            </p>
+          </div>
+          <NextNodeRow
+            value={(cfg as { next_node_key?: string }).next_node_key ?? ""}
+            allNodes={allNodes}
+            currentKey={node.node_key}
+            onChange={(v) => onUpdateConfig({ next_node_key: v })}
+            label="After replying, advance to"
+          />
+        </>
+      );
+
     case "handoff":
       return (
         <TextRow

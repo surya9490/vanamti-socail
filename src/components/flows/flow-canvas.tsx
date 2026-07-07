@@ -684,6 +684,7 @@ const ADD_NODE_TYPES: NodeType[] = [
   "collect_input",
   "condition",
   "set_tag",
+  "order_lookup",
   "handoff",
   "end",
 ];
