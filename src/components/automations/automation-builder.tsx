@@ -802,6 +802,21 @@ type StepPath = (
 interface StepListProps {
   steps: BuilderStep[]
   parentPath: StepPath
+  /**
+   * Optional explicit parent scope. When set, StepList uses it verbatim
+   * instead of deriving from `parentPath`'s tail. ConditionBranches
+   * relies on this to hand the branch scope down WITHOUT also stuffing
+   * a placeholder branch segment into parentPath — the old design did
+   * both, and StepRenderer would then append its own real branch
+   * segment on top, giving every nested step a path with duplicated
+   * tail segments. mapAtPath/removeAt/moveAt would descend into
+   * `child.branches` looking for the phantom second segment, find
+   * undefined on any leaf, and silently no-op — which is exactly the
+   * "can't type text / can't delete" bug reported for steps inside a
+   * Condition. Root-level steps were unaffected because parentPath was
+   * empty and no duplication occurred.
+   */
+  parentScope?: ParentScope
   expandedId: string | null
   setExpandedId: (id: string | null) => void
   updateStep: (path: StepPath, updater: (s: BuilderStep) => BuilderStep) => void
@@ -811,15 +826,16 @@ interface StepListProps {
 }
 
 function StepList(props: StepListProps) {
-  const { steps, parentPath, ...rest } = props
+  const { steps, parentPath, parentScope: explicitScope, ...rest } = props
   const parentScope: ParentScope =
-    parentPath.length === 0
+    explicitScope ??
+    (parentPath.length === 0
       ? { kind: "root" }
       : (() => {
           const last = parentPath[parentPath.length - 1]
           if (last.kind !== "branch") return { kind: "root" } as const
           return { kind: "branch", parentCid: last.parentCid, branch: last.branch } as const
-        })()
+        })())
 
   return (
     <div className="flex flex-col items-center">
@@ -966,27 +982,34 @@ function ConditionBranches({
 } & Omit<StepListProps, "steps" | "parentPath">) {
   const yes = step.branches?.yes ?? []
   const no = step.branches?.no ?? []
-  // Build the child scope by appending a branch marker. The scope the
-  // StepList uses is driven by the LAST element of parentPath, so the
-  // tail's `index` doesn't matter — it's replaced per child during walks.
-  const yesPath: StepPath = [
-    ...parentPath,
-    { kind: "branch", parentCid: step.cid, branch: "yes", index: 0 },
-  ]
-  const noPath: StepPath = [
-    ...parentPath,
-    { kind: "branch", parentCid: step.cid, branch: "no", index: 0 },
-  ]
+  // Pass the branch scope down as an explicit prop and leave parentPath
+  // ALONE. The old design appended a placeholder branch segment here
+  // AND then StepRenderer appended its real branch segment — every
+  // nested step's path ended up with a duplicated tail, and every
+  // walker (mapAtPath, removeAt, moveAt) silently no-oped on children
+  // inside conditions. See StepListProps.parentScope for the full story.
+  const yesScope: ParentScope = { kind: "branch", parentCid: step.cid, branch: "yes" }
+  const noScope: ParentScope = { kind: "branch", parentCid: step.cid, branch: "no" }
   return (
     // Stack Yes/No vertically on mobile — two columns at 375px would
     // cram each branch to ~170px which is too narrow for the nested
     // cards. Two-column grid returns on sm+.
     <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
       <BranchColumn label="Yes" color="text-primary">
-        <StepList {...props} steps={yes} parentPath={yesPath} />
+        <StepList
+          {...props}
+          steps={yes}
+          parentPath={parentPath}
+          parentScope={yesScope}
+        />
       </BranchColumn>
       <BranchColumn label="No" color="text-rose-400">
-        <StepList {...props} steps={no} parentPath={noPath} />
+        <StepList
+          {...props}
+          steps={no}
+          parentPath={parentPath}
+          parentScope={noScope}
+        />
       </BranchColumn>
     </div>
   )
@@ -1314,15 +1337,33 @@ function insertAt(
   node: BuilderStep,
 ): BuilderStep[] {
   if (parent.kind === "root") {
+    // Only meaningful at the outermost call — "root" means "the
+    // top-level steps array of the whole automation", not "the current
+    // list I'm walking". Recursive descents below never carry a root
+    // scope, so this branch never fires inside the recursion.
     const copy = [...steps]
     copy.splice(index, 0, node)
     return copy
   }
   return steps.map((s) => {
-    if (s.cid !== parent.parentCid || !s.branches) return s
-    const list = [...s.branches[parent.branch]]
-    list.splice(index, 0, node)
-    return { ...s, branches: { ...s.branches, [parent.branch]: list } }
+    if (s.cid === parent.parentCid && s.branches) {
+      const list = [...s.branches[parent.branch]]
+      list.splice(index, 0, node)
+      return { ...s, branches: { ...s.branches, [parent.branch]: list } }
+    }
+    // Not this condition — but the target may be a Condition NESTED
+    // inside this step's branches. Recurse into both branches so that
+    // adding a step deep in the tree actually reaches the intended
+    // parent. The previous implementation only checked top-level steps
+    // and silently swallowed inserts targeting nested conditions.
+    if (!s.branches) return s
+    return {
+      ...s,
+      branches: {
+        yes: insertAt(s.branches.yes, parent, index, node),
+        no: insertAt(s.branches.no, parent, index, node),
+      },
+    }
   })
 }
 
@@ -1444,7 +1485,20 @@ function moveAt(
   return steps.map((s) => {
     if (s.cid !== head.parentCid || !s.branches) return s
     const bucket = s.branches[head.branch]
-    const next = rest.length === 0 ? swap(bucket, head.index) : bucket
+    // rest === 0 → swap this bucket. Otherwise recurse into the child
+    // at head.index. The previous version returned `bucket` unchanged
+    // when rest was non-empty, so arrow buttons on any step inside a
+    // nested condition were silent no-ops (mirrors the same bug
+    // pattern that removeAt already handles correctly via
+    // removeFromBranches).
+    const next =
+      rest.length === 0
+        ? swap(bucket, head.index)
+        : bucket.map((child, i) =>
+            i !== head.index
+              ? child
+              : { ...child, branches: moveInBranches(child.branches, rest, direction) },
+          )
     return { ...s, branches: { ...s.branches, [head.branch]: next } }
   })
 }

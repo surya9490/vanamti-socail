@@ -11,12 +11,41 @@ import {
   validateTriggerForActivation,
 } from '@/lib/automations/validate'
 
-async function requireUser() {
+/**
+ * Load the caller's account_id via a user-scoped Supabase client (RLS
+ * confirms the caller can see their own profile row). Automations are
+ * account-scoped, so ownership below is per-account — teammates on
+ * the same account can edit each other's automations. The previous
+ * user_id-based check locked every automation to its original author,
+ * breaking the multi-user model introduced by migration 017.
+ */
+async function requireAccount(): Promise<
+  | { ok: true; userId: string; accountId: string }
+  | { ok: false; response: NextResponse }
+> {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  return user
+  if (!user) {
+    return { ok: false, response: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
+  }
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('account_id')
+    .eq('user_id', user.id)
+    .maybeSingle()
+  const accountId = profile?.account_id as string | undefined
+  if (!accountId) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'Your profile is not linked to an account.' },
+        { status: 403 },
+      ),
+    }
+  }
+  return { ok: true, userId: user.id, accountId }
 }
 
 export async function GET(
@@ -24,15 +53,15 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
-  const user = await requireUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const guard = await requireAccount()
+  if (!guard.ok) return guard.response
 
   const admin = supabaseAdmin()
   const { data: automation, error } = await admin
     .from('automations')
     .select('*')
     .eq('id', id)
-    .eq('user_id', user.id)
+    .eq('account_id', guard.accountId)
     .maybeSingle()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -47,8 +76,8 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
-  const user = await requireUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const guard = await requireAccount()
+  if (!guard.ok) return guard.response
 
   const body = await request.json().catch(() => null)
   if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
@@ -59,10 +88,10 @@ export async function PATCH(
   // to compute the post-patch "effective" state for validation.
   const { data: existing } = await admin
     .from('automations')
-    .select('id, user_id, is_active, trigger_type, trigger_config')
+    .select('id, account_id, is_active, trigger_type, trigger_config')
     .eq('id', id)
     .maybeSingle()
-  if (!existing || existing.user_id !== user.id) {
+  if (!existing || existing.account_id !== guard.accountId) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
@@ -125,14 +154,14 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
-  const user = await requireUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const guard = await requireAccount()
+  if (!guard.ok) return guard.response
 
   const { error } = await supabaseAdmin()
     .from('automations')
     .delete()
     .eq('id', id)
-    .eq('user_id', user.id)
+    .eq('account_id', guard.accountId)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }
