@@ -47,6 +47,8 @@ interface MessagePayload {
     name?: unknown;
     language?: unknown;
     params?: unknown;
+    headerMediaUrl?: unknown;
+    buttonParams?: unknown;
   };
 }
 
@@ -160,6 +162,10 @@ export async function POST(request: Request) {
           language: templateLanguage,
           template: templateRow ?? undefined,
           params: templateParams,
+          messageParams: {
+            headerMediaUrl: typeof (body.template as any)?.headerMediaUrl === 'string' ? (body.template as any).headerMediaUrl : undefined,
+            buttonParams: typeof (body.template as any)?.buttonParams === 'object' ? (body.template as any).buttonParams : undefined,
+          }
         });
         return result.messageId;
       }
