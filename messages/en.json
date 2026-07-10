@@ -1577,7 +1577,12 @@
       "useMode": "Use {mode} mode",
       "active": "Active",
       "accentColor": "Accent color",
-      "useTheme": "Use {name} theme"
+      "useTheme": "Use {name} theme",
+      "notificationSound": "Notification Sound",
+      "notificationSoundDesc": "Choose when to play a chime sound for incoming messages.",
+      "soundOptBackground": "Only when backgrounded",
+      "soundOptAlways": "Always play",
+      "soundOptSilent": "Silent (No sound)"
     },
     "security": {
       "title": "Login & security",

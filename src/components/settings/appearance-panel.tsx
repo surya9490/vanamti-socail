@@ -1,8 +1,9 @@
 "use client";
 
-import { Check, Moon, Palette, SunMoon, Sun } from "lucide-react";
+import { Check, Moon, Palette, SunMoon, Sun, Volume2 } from "lucide-react";
 
 import { useTheme } from "@/hooks/use-theme";
+import { useSoundPreference } from "@/hooks/use-sound-preference";
 import { MODES, THEMES, type Mode, type ThemeId } from "@/lib/themes";
 import { cn } from "@/lib/utils";
 import { useTranslations } from "next-intl";
@@ -22,6 +23,7 @@ import { SettingsPanelHead } from "./settings-panel-head";
  */
 export function AppearancePanel() {
   const { theme, setTheme, mode, setMode } = useTheme();
+  const [soundPref, setSoundPref] = useSoundPreference();
   const t = useTranslations("Settings.appearance");
 
   return (
@@ -70,6 +72,57 @@ export function AppearancePanel() {
               isActive={tObj.id === theme}
               onPick={() => setTheme(tObj.id)}
             />
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-8 space-y-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Volume2 className="size-4 text-muted-foreground" />
+            {t("notificationSound")}
+          </h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t("notificationSoundDesc")}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {(["background", "always", "silent"] as const).map((pref) => (
+            <button
+              key={pref}
+              type="button"
+              onClick={() => setSoundPref(pref)}
+              className={cn(
+                "flex flex-col gap-2 rounded-lg border bg-card p-4 text-left transition-all hover:bg-muted/40",
+                soundPref === pref
+                  ? "border-primary/60 ring-2 ring-primary/40"
+                  : "border-border"
+              )}
+            >
+              <div className="flex items-center justify-between w-full">
+                <span className="text-sm font-semibold capitalize text-foreground">
+                  {pref === "background"
+                    ? t("soundOptBackground")
+                    : pref === "always"
+                    ? t("soundOptAlways")
+                    : t("soundOptSilent")}
+                </span>
+                {soundPref === pref && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
+                    <Check className="h-3 w-3" />
+                    {t("active")}
+                  </span>
+                )}
+              </div>
+              <span className="text-xs text-muted-foreground leading-relaxed">
+                {pref === "background"
+                  ? "Plays audio only if you are looking at another tab or app."
+                  : pref === "always"
+                  ? "Plays audio for every inbound message you receive."
+                  : "Mutes all incoming message notification sounds."}
+              </span>
+            </button>
           ))}
         </div>
       </div>
