@@ -358,9 +358,10 @@
         "notes": "Notes",
         "custom": "Custom Fields",
         "deals": "Deals",
-      "noTags": "No tags",
-      "noDeals": "No deals",
-      "addNotePlaceholder": "Add a note..."
+        "tags": "Tags",
+        "noTags": "No tags",
+        "noDeals": "No deals",
+        "addNotePlaceholder": "Add a note..."
       },
       "actions": {
         "edit": "Edit",
@@ -883,6 +884,7 @@
       "activeAria": "Active",
       "save": "Save",
       "saveDraft": "Save Draft",
+      "delete": "Delete",
       "untitled": "Untitled automation",
       "backToAutomations": "Back to automations",
       "toasts": {
@@ -1500,6 +1502,7 @@
       "appearance": "Appearance",
       "whatsapp": "WhatsApp",
       "templates": "Templates",
+      "quick-replies": "Quick replies",
       "fields": "Fields & tags",
       "deals": "Deals & currency",
       "members": "Team members",
@@ -1692,5 +1695,11 @@
       "reindexTooltip": "Re-embed all documents (e.g. after adding an embeddings key)",
       "loading": "Loading…"
     }
+  },
+  "roles": {
+    "owner": "Owner",
+    "admin": "Admin",
+    "agent": "Agent",
+    "viewer": "Viewer"
   }
 }
