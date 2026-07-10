@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +18,15 @@ import {
 import { MessageSquare } from "lucide-react";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginPageInner />
+    </Suspense>
+  );
+}
+
+function LoginPageInner() {
+  const t = useTranslations("LoginPage");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -50,9 +60,11 @@ export default function LoginPage() {
           <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
             <MessageSquare className="h-6 w-6 text-primary" />
           </div>
-          <CardTitle className="text-xl text-white">Welcome back</CardTitle>
-          <CardDescription className="text-slate-400">
-            Sign in to your account
+          <CardTitle className="text-xl text-foreground">
+            {t('titleWelcome')}
+          </CardTitle>
+          <CardDescription className="text-muted-foreground">
+            {t('descWelcome')}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -64,13 +76,13 @@ export default function LoginPage() {
             )}
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="email" className="text-slate-300">
-                Email
+              <Label htmlFor="email" className="text-muted-foreground">
+                {t('emailLabel')}
               </Label>
               <Input
                 id="email"
                 type="email"
-                placeholder="you@example.com"
+                placeholder={t('emailPlaceholder')}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -80,20 +92,20 @@ export default function LoginPage() {
 
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <Label htmlFor="password" className="text-slate-300">
-                  Password
+                <Label htmlFor="password" className="text-muted-foreground">
+                  {t('passwordLabel')}
                 </Label>
                 <Link
                   href="/forgot-password"
                   className="text-sm text-primary hover:text-primary/80"
                 >
-                  Forgot password?
+                  {t('forgotPassword')}
                 </Link>
               </div>
               <Input
                 id="password"
                 type="password"
-                placeholder="Enter your password"
+                placeholder={t('passwordPlaceholder')}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -106,7 +118,7 @@ export default function LoginPage() {
               disabled={loading}
               className="mt-2 h-10 w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
-              {loading ? "Signing in..." : "Sign in"}
+              {loading ? t('signingIn') : t('signIn')}
             </Button>
           </form>
 

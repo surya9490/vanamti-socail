@@ -1,312 +1,161 @@
 // ============================================================
-// POST /api/v1/messages — public API message send.
+// POST /api/v1/messages — send a WhatsApp message via the public API.
 //
-// Machine-to-machine sends (e.g. the Vanamati Shopify app firing a
-// welcome-code or back-in-stock template). Routes through this CRM —
-// not straight to Meta — so every outbound lands in the shared inbox
-// and the opt-out policy is enforced in exactly one place.
+// The headline public endpoint (issue #245). Unlike the dashboard's
+// `/api/whatsapp/send` (which takes an internal `conversation_id`),
+// this takes a phone number — what an external automation actually
+// has — resolves-or-creates the contact + conversation, then runs the
+// same shared send core.
 //
-// Scope: `messages:send`.
+// Auth: API key with the `messages:send` scope. Account context (and
+// the service-role client) come from `requireApiKey`.
 //
-// Request JSON (template — the normal case for business-initiated):
+// Body:
 //   {
-//     "to": "+919876543210",
-//     "template": { "name": "welcome_code", "language": "en_US",
-//                    "params": ["WELCOME10"] }
+//     "to": "+14155550123",                 // required, E.164
+//     "type": "text",                        // text|template|image|video|document|audio (default: text)
+//     "text": "Hello!",                      // text body, or media caption
+//     "media_url": "https://…/file.pdf",     // required for image/video/document/audio
+//     "filename": "invoice.pdf",             // optional, document filename
+//     "template": {                          // required when type=template
+//       "name": "order_update",
+//       "language": "en_US",
+//       "params": ["A123"] | { "body": [...] }   // array = positional body; object = structured
+//     },
+//     "reply_to_message_id": "<uuid>",       // optional, must be in the same conversation
+//     "name": "Jane Doe"                     // optional, names a newly-created contact
 //   }
-// Or free-form text (only lands inside an open 24h service window):
-//   { "to": "+919876543210", "text": "Hi! …" }
 //
-// Opt-out policy (see lib/contacts/opt-out.ts):
-//   - MARKETING templates to an opted-out contact → 400, refused.
-//   - Templates whose category we can't determine → refused too
-//     (fail closed); sync templates from Meta to classify them.
-//   - UTILITY/AUTHENTICATION templates and free-form text replies
-//     are allowed — transactional traffic the customer asked for.
-//
-// Response: { data: { message_id, to, status: "sent" } }
+// Response (201):
+//   { "data": { "message_id", "whatsapp_message_id", "conversation_id",
+//               "contact_id", "contact_created" } }
 // ============================================================
 
 import { requireApiKey } from '@/lib/auth/api-context';
-import { ok, badRequest, toApiErrorResponse, ApiError } from '@/lib/api/v1/respond';
-import { decrypt } from '@/lib/whatsapp/encryption';
-import { sendTemplateMessage, sendTextMessage } from '@/lib/whatsapp/meta-api';
-import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
+import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation';
 import {
-  sanitizePhoneForMeta,
-  isValidE164,
-  phoneVariants,
-  isRecipientNotAllowedError,
-} from '@/lib/whatsapp/phone-utils';
-import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
-
-interface MessagePayload {
-  to?: unknown;
-  text?: unknown;
-  template?: {
-    name?: unknown;
-    language?: unknown;
-    params?: unknown;
-    headerMediaUrl?: unknown;
-    buttonParams?: unknown;
-  };
-}
+  sendMessageToConversation,
+  validateSendMessageParams,
+  SendMessageError,
+} from '@/lib/whatsapp/send-message';
+import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive';
 
 export async function POST(request: Request) {
   try {
     const ctx = await requireApiKey(request, 'messages:send');
 
-    let body: MessagePayload;
-    try {
-      body = await request.json();
-    } catch {
-      throw badRequest('Request body must be JSON');
+    const body = (await request.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!body || typeof body !== 'object') {
+      return fail('bad_request', 'Request body must be a JSON object', 400);
     }
 
-    const rawTo = typeof body.to === 'string' ? body.to.trim() : '';
-    const to = sanitizePhoneForMeta(rawTo);
-    if (!rawTo || !isValidE164(to)) {
-      throw badRequest('`to` is required and must be a valid phone number with country code');
+    const to = typeof body.to === 'string' ? body.to.trim() : '';
+    if (!to) {
+      return fail('bad_request', "'to' is required", 400);
     }
 
-    const hasTemplate = body.template && typeof body.template === 'object';
-    const text = typeof body.text === 'string' && body.text.trim() ? body.text.trim() : null;
-    if (!hasTemplate && !text) {
-      throw badRequest('Provide either `template` or `text`');
-    }
+    const type = typeof body.type === 'string' ? body.type : 'text';
 
-    const templateName =
-      hasTemplate && typeof body.template!.name === 'string' ? body.template!.name.trim() : '';
-    if (hasTemplate && !templateName) {
-      throw badRequest('`template.name` is required for template sends');
+    // Unpack the optional `template` object into the flat params the
+    // send core expects. `params` as an array → legacy positional body
+    // params; as an object → structured header/body/button params.
+    const template =
+      body.template && typeof body.template === 'object'
+        ? (body.template as Record<string, unknown>)
+        : null;
+    const templateParams = Array.isArray(template?.params)
+      ? (template.params as unknown[]).filter(
+          (p): p is string => typeof p === 'string'
+        )
+      : undefined;
+    // Vanamati-compat: accept `template.headerMediaUrl` and
+    // `template.buttonParams` as top-level template fields (what the
+    // Vanamati Shopify app sends). Fold them into templateMessageParams
+    // alongside main's `template.params: { ... }` structured form.
+    const structuredParams =
+      template?.params && !Array.isArray(template.params)
+        ? (template.params as Record<string, unknown>)
+        : null;
+    const legacyMessageParams: Record<string, unknown> = {};
+    if (typeof template?.headerMediaUrl === 'string') {
+      legacyMessageParams.headerMediaUrl = template.headerMediaUrl;
     }
-    const templateLanguage =
-      hasTemplate && typeof body.template!.language === 'string' && body.template!.language
-        ? (body.template!.language as string)
-        : 'en_US';
-    let templateParams: string[] = [];
-    if (hasTemplate && body.template!.params !== undefined) {
-      if (
-        !Array.isArray(body.template!.params) ||
-        (body.template!.params as unknown[]).some((p) => typeof p !== 'string')
-      ) {
-        throw badRequest('`template.params` must be an array of strings');
+    if (template?.buttonParams && typeof template.buttonParams === 'object') {
+      legacyMessageParams.buttonParams = template.buttonParams;
+    }
+    const templateMessageParams =
+      structuredParams || Object.keys(legacyMessageParams).length > 0
+        ? { ...(structuredParams ?? {}), ...legacyMessageParams }
+        : undefined;
+
+    // Validate the message shape BEFORE resolveConversationByPhone
+    // finds-or-creates a contact + conversation, so a bad payload 400s
+    // without leaving an orphan contact/conversation behind.
+    // Validated by `validateSendMessageParams` below; the cast just bridges
+    // the untyped JSON body to the send-core param type.
+    const interactivePayload =
+      body.interactive_payload && typeof body.interactive_payload === 'object'
+        ? (body.interactive_payload as InteractiveMessagePayload)
+        : null;
+
+    validateSendMessageParams({
+      messageType: type,
+      contentText: typeof body.text === 'string' ? body.text : null,
+      mediaUrl: typeof body.media_url === 'string' ? body.media_url : null,
+      templateName: typeof template?.name === 'string' ? template.name : null,
+      interactivePayload,
+    });
+
+    // Find-or-create the conversation for this phone, then send. Both
+    // steps share `SendMessageError`, so one catch maps the whole
+    // pipeline to the envelope.
+    const resolved = await resolveConversationByPhone(
+      ctx.supabase,
+      ctx.accountId,
+      to,
+      typeof body.name === 'string' ? body.name : null
+    );
+
+    const result = await sendMessageToConversation(
+      ctx.supabase,
+      ctx.accountId,
+      {
+        conversationId: resolved.conversationId,
+        messageType: type,
+        contentText: typeof body.text === 'string' ? body.text : null,
+        mediaUrl: typeof body.media_url === 'string' ? body.media_url : null,
+        filename: typeof body.filename === 'string' ? body.filename : null,
+        templateName: typeof template?.name === 'string' ? template.name : null,
+        templateLanguage:
+          typeof template?.language === 'string' ? template.language : null,
+        templateParams,
+        templateMessageParams,
+        interactivePayload,
+        replyToMessageId:
+          typeof body.reply_to_message_id === 'string'
+            ? body.reply_to_message_id
+            : null,
       }
-      templateParams = body.template!.params as string[];
-    }
+    );
 
-    // WhatsApp config for this account.
-    const { data: config, error: configErr } = await ctx.supabase
-      .from('whatsapp_config')
-      .select('*')
-      .eq('account_id', ctx.accountId)
-      .single();
-    if (configErr || !config) {
-      throw badRequest('WhatsApp is not configured for this account');
-    }
-    const accessToken = decrypt(config.access_token);
-
-    // Existing contact (if any) — drives the opt-out check and inbox
-    // mirroring. A brand-new recipient gets a contact row below.
-    const existingContact = await findExistingContact(ctx.supabase, ctx.accountId, to);
-
-    // Template row: needed to build header/button components AND to
-    // classify marketing vs utility for the opt-out policy.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let templateRow: any = null;
-    if (hasTemplate) {
-      const { data: rawRow } = await ctx.supabase
-        .from('message_templates')
-        .select('*')
-        .eq('account_id', ctx.accountId)
-        .eq('name', templateName)
-        .eq('language', templateLanguage)
-        .maybeSingle();
-      if (rawRow && !isMessageTemplate(rawRow)) {
-        throw new ApiError(
-          'internal',
-          'Template row is malformed locally — run "Sync from Meta" in Settings to repair it',
-          500,
-        );
-      }
-      templateRow = rawRow ?? null;
-    }
-
-    // ── Opt-out enforcement ──────────────────────────────────────
-    if (existingContact && (existingContact as { opted_out_at?: string | null }).opted_out_at) {
-      if (hasTemplate) {
-        const category = String(templateRow?.category ?? '').toLowerCase();
-        const isTransactional = category === 'utility' || category === 'authentication';
-        if (!isTransactional) {
-          // Marketing — or unknown category (fail closed).
-          throw badRequest(
-            templateRow
-              ? 'Recipient has opted out of marketing messages (STOP). Only utility/authentication templates may be sent.'
-              : 'Recipient has opted out and this template is not synced locally, so its category is unknown. Sync templates from Meta, or use a utility template.',
-          );
-        }
-      }
-      // Free-form text falls through: it only ever lands inside an
-      // open service window (Meta rejects it otherwise), which means
-      // the customer messaged us in the last 24h.
-    }
-
-    // ── Send via Meta, retrying trunk-prefix variants ────────────
-    const attempt = async (phone: string): Promise<string> => {
-      if (hasTemplate) {
-        const result = await sendTemplateMessage({
-          phoneNumberId: config.phone_number_id,
-          accessToken,
-          to: phone,
-          templateName,
-          language: templateLanguage,
-          template: templateRow ?? undefined,
-          params: templateParams,
-          messageParams: {
-            headerMediaUrl: typeof (body.template as any)?.headerMediaUrl === 'string' ? (body.template as any).headerMediaUrl : undefined,
-            buttonParams: typeof (body.template as any)?.buttonParams === 'object' ? (body.template as any).buttonParams : undefined,
-          }
-        });
-        return result.messageId;
-      }
-      const result = await sendTextMessage({
-        phoneNumberId: config.phone_number_id,
-        accessToken,
-        to: phone,
-        text: text!,
-      });
-      return result.messageId;
-    };
-
-    let waMessageId = '';
-    let workingPhone = to;
-    let lastError: unknown = null;
-    for (const variant of phoneVariants(to)) {
-      try {
-        waMessageId = await attempt(variant);
-        workingPhone = variant;
-        lastError = null;
-        break;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (!isRecipientNotAllowedError(message)) {
-          lastError = err;
-          break;
-        }
-        lastError = err;
-      }
-    }
-    if (!waMessageId) {
-      const message = lastError instanceof Error ? lastError.message : 'Unknown Meta API error';
-      throw new ApiError('internal', `Meta API error: ${message}`, 502);
-    }
-
-    // ── Mirror into the inbox (best-effort, never fails the send) ──
-    try {
-      const ownerUserId = await resolveOwnerUserId(ctx.supabase, ctx.accountId);
-      const contactId = await ensureContact(ctx, existingContact, workingPhone, ownerUserId);
-      const conversationId = await ensureConversation(ctx, contactId, ownerUserId);
-      const contentText = hasTemplate ? `[template: ${templateName}]` : text!;
-
-      await ctx.supabase.from('messages').insert({
-        conversation_id: conversationId,
-        sender_type: 'bot', // machine-sent via the public API
-        content_type: hasTemplate ? 'template' : 'text',
-        content_text: contentText,
-        template_name: hasTemplate ? templateName : null,
-        message_id: waMessageId,
-        status: 'sent',
-      });
-      await ctx.supabase
-        .from('conversations')
-        .update({
-          last_message_text: contentText,
-          last_message_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', conversationId);
-    } catch (mirrorErr) {
-      console.error(
-        '[api/v1/messages] inbox mirroring failed (message already sent):',
-        mirrorErr instanceof Error ? mirrorErr.message : mirrorErr,
-      );
-    }
-
-    return ok({ message_id: waMessageId, to: workingPhone, status: 'sent' });
+    return ok(
+      {
+        message_id: result.messageId,
+        whatsapp_message_id: result.whatsappMessageId,
+        conversation_id: resolved.conversationId,
+        contact_id: resolved.contactId,
+        contact_created: resolved.contactCreated,
+      },
+      201
+    );
   } catch (err) {
+    if (err instanceof SendMessageError) {
+      return fail(err.code, err.message, err.status);
+    }
     return toApiErrorResponse(err);
   }
-}
-
-// ── Inbox-mirroring helpers ────────────────────────────────────────
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Ctx = { supabase: any; accountId: string };
-
-async function resolveOwnerUserId(
-  supabase: Ctx['supabase'],
-  accountId: string,
-): Promise<string> {
-  const { data, error } = await supabase
-    .from('accounts')
-    .select('owner_user_id')
-    .eq('id', accountId)
-    .single();
-  if (error || !data?.owner_user_id) {
-    throw new Error('Could not resolve account owner');
-  }
-  return data.owner_user_id as string;
-}
-
-async function ensureContact(
-  ctx: Ctx,
-  existing: { id: string } | null,
-  phone: string,
-  ownerUserId: string,
-): Promise<string> {
-  if (existing) return existing.id;
-  const { data, error } = await ctx.supabase
-    .from('contacts')
-    .insert({
-      account_id: ctx.accountId,
-      user_id: ownerUserId,
-      phone,
-      name: phone,
-    })
-    .select('id')
-    .single();
-  if (error) {
-    if (isUniqueViolation(error)) {
-      const raced = await findExistingContact(ctx.supabase, ctx.accountId, phone);
-      if (raced) return raced.id;
-    }
-    throw error;
-  }
-  return data.id as string;
-}
-
-async function ensureConversation(
-  ctx: Ctx,
-  contactId: string,
-  ownerUserId: string,
-): Promise<string> {
-  const { data: existing } = await ctx.supabase
-    .from('conversations')
-    .select('id')
-    .eq('account_id', ctx.accountId)
-    .eq('contact_id', contactId)
-    .maybeSingle();
-  if (existing) return existing.id as string;
-
-  const { data, error } = await ctx.supabase
-    .from('conversations')
-    .insert({
-      account_id: ctx.accountId,
-      user_id: ownerUserId,
-      contact_id: contactId,
-    })
-    .select('id')
-    .single();
-  if (error) throw error;
-  return data.id as string;
 }
