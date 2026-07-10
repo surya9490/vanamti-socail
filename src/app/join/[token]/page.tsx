@@ -101,6 +101,7 @@ export default function JoinPage() {
   const [authedUserId, setAuthedUserId] = useState<string | null | undefined>(
     undefined, // undefined = unknown / still loading; null = signed out
   );
+  const [authedUserEmail, setAuthedUserEmail] = useState<string | null>(null);
   const [accepting, setAccepting] = useState(false);
   // `redeem_invitation` returns 409 when the caller's current account
   // has domain data, or they're already a member of a shared account.
@@ -115,6 +116,7 @@ export default function JoinPage() {
     if (!token) return;
     setPeek(null);
     setAuthedUserId(undefined);
+    setAuthedUserEmail(null);
     try {
       const [peekRes, authRes] = await Promise.all([
         fetch(`/api/invitations/${encodeURIComponent(token)}/peek`, {
@@ -125,10 +127,12 @@ export default function JoinPage() {
       const peekBody = (await peekRes.json()) as PeekResult;
       setPeek(peekBody);
       setAuthedUserId(authRes.data.user?.id ?? null);
+      setAuthedUserEmail(authRes.data.user?.email ?? null);
     } catch (err) {
       console.error('[join] peek error:', err);
       setPeek({ ok: false, reason: 'server_error' });
       setAuthedUserId(null);
+      setAuthedUserEmail(null);
     }
   }, [token]);
 
@@ -151,11 +155,13 @@ export default function JoinPage() {
         if (cancelled) return;
         setPeek(peekBody);
         setAuthedUserId(authRes.data.user?.id ?? null);
+        setAuthedUserEmail(authRes.data.user?.email ?? null);
       } catch (err) {
         console.error('[join] peek error:', err);
         if (cancelled) return;
         setPeek({ ok: false, reason: 'server_error' });
         setAuthedUserId(null);
+        setAuthedUserEmail(null);
       }
     })();
     return () => {
@@ -324,6 +330,11 @@ export default function JoinPage() {
         <Card className="w-full max-w-md border-border bg-card">
           {inviteHeader}
           <CardContent className="flex flex-col gap-3">
+            {authedUserEmail && (
+              <div className="text-center text-sm text-muted-foreground mb-1">
+                Signed in as <span className="font-semibold text-foreground">{authedUserEmail}</span>
+              </div>
+            )}
             <Button
               onClick={handleAccept}
               disabled={accepting}
@@ -339,6 +350,21 @@ export default function JoinPage() {
                   <CheckCircle className="size-4" />
                   Accept invitation
                 </>
+              )}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleSignOutAndRetry}
+              disabled={signingOut}
+              className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              {signingOut ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Signing out…
+                </>
+              ) : (
+                'Sign out / Use different account'
               )}
             </Button>
             <p className="text-center text-xs text-muted-foreground">

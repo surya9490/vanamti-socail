@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
@@ -32,6 +32,8 @@ function LoginPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const inviteToken = searchParams.get("invite");
   const supabase = createClient();
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -50,7 +52,11 @@ function LoginPageInner() {
       return;
     }
 
-    router.push("/dashboard");
+    if (inviteToken) {
+      router.push(`/join/${encodeURIComponent(inviteToken)}`);
+    } else {
+      router.push("/dashboard");
+    }
   };
 
   return (
@@ -122,16 +128,21 @@ function LoginPageInner() {
             </Button>
           </form>
 
-          {/*
-            Self-signup is disabled — this deployment is invite-only.
-            Admin invites new members from Settings → Members. We don't
-            link to /signup anymore (the route doesn't exist), and
-            Supabase rejects signUp() at the auth layer regardless.
-            A small note guides users who showed up expecting it.
-          */}
-          <p className="mt-6 text-center text-xs text-slate-500">
-            New here? Ask your admin to send you an invite.
-          </p>
+          {inviteToken ? (
+            <p className="mt-6 text-center text-sm text-slate-400">
+              New here?{" "}
+              <Link
+                href={`/signup?invite=${encodeURIComponent(inviteToken)}`}
+                className="text-primary hover:text-primary/80 font-medium"
+              >
+                Create an account &amp; join
+              </Link>
+            </p>
+          ) : (
+            <p className="mt-6 text-center text-xs text-slate-500">
+              New here? Ask your admin to send you an invite.
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

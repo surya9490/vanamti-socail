@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useState, useEffect } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -14,7 +14,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { MessageSquare, CheckCircle, UsersRound } from "lucide-react";
+import { MessageSquare, CheckCircle, UsersRound, Loader2 } from "lucide-react";
 
 // `useSearchParams` opts the component out of static prerendering
 // unless wrapped in Suspense — same pattern as /login.
@@ -47,13 +47,60 @@ function SignupPageInner() {
   const [success, setSuccess] = useState(false);
   const supabase = createClient();
 
-  // This deployment is invite-only. Reaching /signup without an
-  // invite token (e.g. someone typing the URL directly) shows a
-  // notice instead of the form. Supabase's auth layer still has
-  // enable_signup=true so the invitation flow — which calls signUp()
-  // from this same component, but only with a token in the URL —
-  // continues to work.
-  if (!inviteToken) {
+  const [verifyingInvite, setVerifyingInvite] = useState(true);
+  const [isValidInvite, setIsValidInvite] = useState(false);
+  const [inviteAccountName, setInviteAccountName] = useState<string | null>(null);
+
+  // Hook to validate the invitation token
+  useEffect(() => {
+    if (!inviteToken) {
+      setVerifyingInvite(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/invitations/${encodeURIComponent(inviteToken)}/peek`, {
+          cache: 'no-store',
+        });
+        const peekBody = await res.json();
+        if (cancelled) return;
+        if (peekBody.ok) {
+          setIsValidInvite(true);
+          setInviteAccountName(peekBody.account_name);
+        } else {
+          setIsValidInvite(false);
+        }
+      } catch (err) {
+        console.error('[signup] failed to verify invite:', err);
+        if (cancelled) return;
+        setIsValidInvite(false);
+      } finally {
+        if (!cancelled) setVerifyingInvite(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteToken]);
+
+  // Loading state while verifying invitation
+  if (verifyingInvite) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-4">
+        <Card className="w-full max-w-md border-border bg-card">
+          <CardContent className="flex flex-col items-center gap-3 py-12">
+            <Loader2 className="size-6 animate-spin text-primary" />
+            <p className="text-sm text-muted-foreground">Verifying invitation…</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // This deployment is invite-only. Reaching /signup without a
+  // valid invite token shows a notice instead of the form.
+  if (!inviteToken || !isValidInvite) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-4">
         <Card className="w-full max-w-md border-border bg-card">
@@ -65,7 +112,7 @@ function SignupPageInner() {
               Sign up by invitation only
             </CardTitle>
             <CardDescription className="text-muted-foreground">
-              New accounts are created via an invite link from an
+              New accounts are created via a valid invite link from an
               administrator. Ask whoever runs this workspace to send
               you one.
             </CardDescription>
@@ -182,7 +229,9 @@ function SignupPageInner() {
           </CardTitle>
           <CardDescription className="text-muted-foreground">
             {inviteToken
-              ? "Verify your email, then accept the invitation to join your team."
+              ? inviteAccountName
+                ? `Verify your email, then accept the invitation to join ${inviteAccountName}.`
+                : "Verify your email, then accept the invitation to join your team."
               : "Get started with CRM Template for WhatsApp"}
           </CardDescription>
         </CardHeader>
