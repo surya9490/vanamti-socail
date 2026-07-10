@@ -286,6 +286,255 @@ const LEAD_CAPTURE: FlowTemplate = {
 };
 
 // ============================================================
+// 4. Vanamati — welcome new customer, show product menu, capture interest
+// ============================================================
+const VANAMATI_STORE: FlowTemplate = {
+  slug: "vanamati_store",
+  name: "Vanamati — product menu",
+  description:
+    "Greet every first-time customer with the Vanamati product menu (honey + ghee variants) and an FAQ shortcut. Tapping a product logs interest and hands off to a human for order confirmation.",
+  icon: "MessageSquare",
+  trigger_type: "first_inbound_message",
+  trigger_config: {},
+  entry_node_id: "start",
+  nodes: [
+    {
+      node_key: "start",
+      node_type: "start",
+      config: { next_node_key: "welcome" },
+    },
+    {
+      node_key: "welcome",
+      node_type: "send_message",
+      config: {
+        text:
+          "🙏 Welcome to Vanamati — pure, natural honey and A2 ghee, sourced straight from small farms with no additives.\n\nHere's what we currently offer:",
+        next_node_key: "menu",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "menu",
+      node_type: "send_list",
+      config: {
+        text: "Tap a product to know more or place an order. Our team will reach out to confirm.",
+        button_label: "View menu",
+        footer_text: "All prices in ₹. Free shipping on orders above ₹999.",
+        sections: [
+          {
+            title: "Honey",
+            rows: [
+              {
+                reply_id: "honey_acacia_1000",
+                title: "Acacia Honey 1L",
+                description: "₹999 · 1000ml · Mild floral notes",
+                next_node_key: "interest_captured",
+              },
+              {
+                reply_id: "honey_acacia_500",
+                title: "Acacia Honey 500ml",
+                description: "₹599 · 500ml",
+                next_node_key: "interest_captured",
+              },
+              {
+                reply_id: "honey_acacia_250",
+                title: "Acacia Honey 250ml",
+                description: "₹299 · 250ml · Try-me size",
+                next_node_key: "interest_captured",
+              },
+              {
+                reply_id: "honey_multi_1000",
+                title: "Multi Floral 1L",
+                description: "₹899 · 1000ml · Rich wildflower",
+                next_node_key: "interest_captured",
+              },
+              {
+                reply_id: "honey_multi_500",
+                title: "Multi Floral 500ml",
+                description: "₹549 · 500ml",
+                next_node_key: "interest_captured",
+              },
+              {
+                reply_id: "honey_multi_250",
+                title: "Multi Floral 250ml",
+                description: "₹249 · 250ml · Try-me size",
+                next_node_key: "interest_captured",
+              },
+            ],
+          },
+          {
+            title: "Ghee",
+            rows: [
+              {
+                reply_id: "ghee_1000",
+                title: "A2 Ghee 1L",
+                description: "₹1999 · 1000ml · Hand-churned",
+                next_node_key: "interest_captured",
+              },
+              {
+                reply_id: "ghee_500",
+                title: "A2 Ghee 500ml",
+                description: "₹1099 · 500ml",
+                next_node_key: "interest_captured",
+              },
+              {
+                reply_id: "ghee_250",
+                title: "A2 Ghee 250ml",
+                description: "₹599 · 250ml · Try-me size",
+                next_node_key: "interest_captured",
+              },
+            ],
+          },
+          {
+            title: "Help",
+            rows: [
+              {
+                reply_id: "faq",
+                title: "FAQs",
+                description: "Answers to common questions",
+                next_node_key: "faq_menu",
+              },
+            ],
+          },
+        ],
+      } as SendListNodeConfig,
+    },
+    {
+      node_key: "interest_captured",
+      node_type: "send_message",
+      config: {
+        text:
+          "Thank you for showing interest 🙌\n\nOur team will reach out to you shortly to confirm sizes, delivery address, and payment. Meanwhile, feel free to ask any questions right here.",
+        next_node_key: "interest_handoff",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "interest_handoff",
+      node_type: "handoff",
+      config: {
+        note: "Product interest from menu — check the last interactive reply for the exact SKU the customer picked.",
+      } as HandoffNodeConfig,
+    },
+    {
+      node_key: "faq_menu",
+      node_type: "send_list",
+      config: {
+        text: "Pick a question below.",
+        button_label: "See questions",
+        sections: [
+          {
+            title: "Questions",
+            rows: [
+              {
+                reply_id: "faq_purity",
+                title: "Are your products pure?",
+                description: "Every batch tested & certified",
+                next_node_key: "faq_purity_ans",
+              },
+              {
+                reply_id: "faq_shipping",
+                title: "Do you ship pan-India?",
+                description: "Same-day dispatch on weekdays",
+                next_node_key: "faq_shipping_ans",
+              },
+              {
+                reply_id: "faq_shelf",
+                title: "How long do they last?",
+                description: "Honey 24 mo · Ghee 6 mo",
+                next_node_key: "faq_shelf_ans",
+              },
+              {
+                reply_id: "faq_cod",
+                title: "Is COD available?",
+                description: "Yes, on orders above ₹500",
+                next_node_key: "faq_cod_ans",
+              },
+              {
+                reply_id: "faq_human",
+                title: "Talk to a human",
+                description: "Chat with our team",
+                next_node_key: "faq_human_handoff",
+              },
+            ],
+          },
+        ],
+      } as SendListNodeConfig,
+    },
+    {
+      node_key: "faq_purity_ans",
+      node_type: "send_message",
+      config: {
+        text:
+          "✅ Every batch is lab-tested for purity and traceable back to the farm. No sugar, syrup, or additives — ever. Raw, unpasteurised, and single-origin.",
+        next_node_key: "faq_after_answer",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "faq_shipping_ans",
+      node_type: "send_message",
+      config: {
+        text:
+          "🚚 We ship across India via COD or prepaid. Orders placed before 4 pm dispatch the same day (Mon–Sat). Delivery in 3–7 business days depending on your PIN code.",
+        next_node_key: "faq_after_answer",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "faq_shelf_ans",
+      node_type: "send_message",
+      config: {
+        text:
+          "🧴 Raw honey stays good for 24 months if kept in a cool, dry place — natural crystallisation is normal and safe. A2 ghee stays fresh for 6 months at room temperature; refrigerate to extend it further.",
+        next_node_key: "faq_after_answer",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "faq_cod_ans",
+      node_type: "send_message",
+      config: {
+        text:
+          "💳 Cash on Delivery is available on all orders above ₹500. Prepaid orders (UPI / card / netbanking) get a 5% discount at checkout.",
+        next_node_key: "faq_after_answer",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "faq_after_answer",
+      node_type: "send_buttons",
+      config: {
+        text: "Anything else I can help with?",
+        buttons: [
+          {
+            reply_id: "back_to_menu",
+            title: "See products",
+            next_node_key: "menu",
+          },
+          {
+            reply_id: "more_faqs",
+            title: "More questions",
+            next_node_key: "faq_menu",
+          },
+          {
+            reply_id: "done",
+            title: "That's all",
+            next_node_key: "end",
+          },
+        ],
+      } as SendButtonsNodeConfig,
+    },
+    {
+      node_key: "faq_human_handoff",
+      node_type: "handoff",
+      config: {
+        note: "Customer asked to talk to a human from the FAQ menu.",
+      } as HandoffNodeConfig,
+    },
+    {
+      node_key: "end",
+      node_type: "end",
+      config: {},
+    },
+  ],
+};
+
+// ============================================================
 // Registry
 // ============================================================
 
@@ -293,6 +542,7 @@ const TEMPLATES: Record<string, FlowTemplate> = {
   welcome_menu: WELCOME_MENU,
   faq_bot: FAQ_BOT,
   lead_capture: LEAD_CAPTURE,
+  vanamati_store: VANAMATI_STORE,
 };
 
 export function getFlowTemplate(slug: string): FlowTemplate | null {
