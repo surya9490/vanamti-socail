@@ -835,6 +835,7 @@
         "wait": "Wait",
         "condition": "Condition (If/Else)",
         "send_webhook": "Send Webhook",
+        "order_lookup": "Order Status Lookup",
         "close_conversation": "Close Conversation"
       },
       "triggers": {
@@ -1161,6 +1162,10 @@
         "handoff": {
           "label": "Handoff to agent",
           "blurb": "Hands the conversation to a human"
+        },
+        "order_lookup": {
+          "label": "Order lookup",
+          "blurb": "Replies with an order's status (Vanamati)"
         },
         "end": {
           "label": "End",
