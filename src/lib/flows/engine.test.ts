@@ -141,6 +141,29 @@ describe("matchesKeywordTrigger", () => {
     expect(matchesKeywordTrigger("support center", cfg)).toBe(true);
     expect(matchesKeywordTrigger("nope", cfg)).toBe(false);
   });
+
+  it("match_type='starts_with' matches the keyword as a leading whole word", () => {
+    const cfg = { keywords: ["hi"], match_type: "starts_with" as const };
+    // Matches "hi" as its own opening word.
+    expect(matchesKeywordTrigger("hi", cfg)).toBe(true);
+    expect(matchesKeywordTrigger("Hi there", cfg)).toBe(true);
+    expect(matchesKeywordTrigger("hi! I want honey", cfg)).toBe(true);
+    expect(matchesKeywordTrigger("  hi  ", cfg)).toBe(true);
+    // Does NOT match mid-word or as a substring — the whole point.
+    expect(matchesKeywordTrigger("history of honey", cfg)).toBe(false);
+    expect(matchesKeywordTrigger("what is your shipping", cfg)).toBe(false);
+    expect(matchesKeywordTrigger("i want to buy", cfg)).toBe(false);
+  });
+
+  it("starts_with handles a greeting list", () => {
+    const cfg = {
+      keywords: ["hi", "hello", "hey", "namaste"],
+      match_type: "starts_with" as const,
+    };
+    expect(matchesKeywordTrigger("hello, do you sell ghee?", cfg)).toBe(true);
+    expect(matchesKeywordTrigger("Namaste 🙏", cfg)).toBe(true);
+    expect(matchesKeywordTrigger("please help", cfg)).toBe(false);
+  });
 });
 
 describe("node classification helpers", () => {

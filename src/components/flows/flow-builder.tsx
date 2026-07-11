@@ -308,25 +308,58 @@ function TriggerPanel({
           </Select>
         </div>
         {state.trigger_type === 'keyword' && (
-          <div>
-            <label className="text-muted-foreground mb-1 block text-xs">
-              {t('keywordsLabel')}
-            </label>
-            <KeywordsInput
-              keywords={
-                Array.isArray(state.trigger_config.keywords)
-                  ? (state.trigger_config.keywords as string[])
-                  : []
-              }
-              onChange={(keywords) =>
-                setState((s) => ({
-                  ...s,
-                  trigger_config: { ...s.trigger_config, keywords },
-                }))
-              }
-              t={t}
-            />
-          </div>
+          <>
+            <div>
+              <label className="text-muted-foreground mb-1 block text-xs">
+                {t('keywordsLabel')}
+              </label>
+              <KeywordsInput
+                keywords={
+                  Array.isArray(state.trigger_config.keywords)
+                    ? (state.trigger_config.keywords as string[])
+                    : []
+                }
+                onChange={(keywords) =>
+                  setState((s) => ({
+                    ...s,
+                    trigger_config: { ...s.trigger_config, keywords },
+                  }))
+                }
+                t={t}
+              />
+            </div>
+            <div>
+              <label className="text-muted-foreground mb-1 block text-xs">
+                {t('matchTypeLabel')}
+              </label>
+              <Select
+                value={
+                  (state.trigger_config.match_type as string | undefined) ??
+                  'contains'
+                }
+                onValueChange={(v) =>
+                  setState((s) => ({
+                    ...s,
+                    trigger_config: { ...s.trigger_config, match_type: v },
+                  }))
+                }
+              >
+                <SelectTrigger className="bg-muted">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="starts_with">
+                    {t('matchStartsWith')}
+                  </SelectItem>
+                  <SelectItem value="exact">{t('matchExact')}</SelectItem>
+                  <SelectItem value="contains">{t('matchContains')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground mt-1 text-[10px]">
+                {t('matchTypeHelp')}
+              </p>
+            </div>
+          </>
         )}
       </div>
       {triggerIssues.length > 0 && (

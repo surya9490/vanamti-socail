@@ -257,7 +257,15 @@ export type FlowNodeType = FlowNodeConfig["node_type"];
 export interface KeywordTriggerConfig {
   /** One or more keywords. Match is case-insensitive by default. */
   keywords: string[];
-  match_type?: "exact" | "contains";
+  /**
+   * How a keyword is matched against the message:
+   *   - "contains"    (default): the message contains the keyword anywhere.
+   *   - "exact":      the whole message equals the keyword.
+   *   - "starts_with": the message BEGINS with the keyword as a whole word
+   *     ("hi", "hi there", "hi 👋" — but not "history"). Ideal for greeting
+   *     triggers where "contains" would over-match.
+   */
+  match_type?: "exact" | "contains" | "starts_with";
   case_sensitive?: boolean;
 }
 

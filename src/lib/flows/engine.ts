@@ -137,12 +137,25 @@ export function matchesKeywordTrigger(
 ): boolean {
   if (!text || !cfg.keywords?.length) return false;
   const matchType = cfg.match_type ?? "contains";
-  const haystack = cfg.case_sensitive ? text : text.toLowerCase();
+  const haystack = (cfg.case_sensitive ? text : text.toLowerCase()).trim();
   for (const raw of cfg.keywords) {
     if (!raw) continue;
-    const needle = cfg.case_sensitive ? raw : raw.toLowerCase();
-    if (matchType === "exact" ? haystack === needle : haystack.includes(needle)) {
-      return true;
+    const needle = (cfg.case_sensitive ? raw : raw.toLowerCase()).trim();
+    if (!needle) continue;
+    if (matchType === "exact") {
+      if (haystack === needle) return true;
+    } else if (matchType === "starts_with") {
+      // Whole-word prefix: the message begins with the keyword and the
+      // next char (if any) is a non-letter/digit — so "hi" matches
+      // "hi", "hi there", "hi!" but NOT "history".
+      if (haystack === needle) return true;
+      if (haystack.startsWith(needle)) {
+        const nextChar = haystack.charAt(needle.length);
+        if (!/[a-z0-9]/i.test(nextChar)) return true;
+      }
+    } else {
+      // "contains" (default)
+      if (haystack.includes(needle)) return true;
     }
   }
   return false;
