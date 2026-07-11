@@ -19,6 +19,7 @@
 import {
   Flag,
   GitFork,
+  Image as ImageIcon,
   Inbox,
   ListChecks,
   ListPlus,
@@ -48,6 +49,7 @@ export type NodeType =
   | 'send_list'
   | 'send_media'
   | 'collect_input'
+  | 'await_image'
   | 'condition'
   | 'set_tag'
   | 'order_lookup'
@@ -140,6 +142,13 @@ export const NODE_META: Record<
     blurb: 'Asks a question, saves the reply',
     category: 'logic',
   },
+  await_image: {
+    label: 'Receive image',
+    icon: ImageIcon,
+    color: 'text-teal-300',
+    blurb: 'Waits for a photo (e.g. payment screenshot)',
+    category: 'logic',
+  },
   condition: {
     label: 'If / else',
     icon: GitFork,
@@ -212,6 +221,7 @@ const NODE_HUE: Record<NodeType, { l: number; c: number; h: number }> = {
   send_list: { l: 0.62, c: 0.15, h: 277 }, // indigo
   send_media: { l: 0.65, c: 0.12, h: 210 }, // sky
   collect_input: { l: 0.65, c: 0.1, h: 185 }, // teal — capture
+  await_image: { l: 0.66, c: 0.11, h: 200 }, // cyan-teal — capture a picture
   condition: { l: 0.72, c: 0.15, h: 65 }, // amber — a fork in the road
   set_tag: { l: 0.65, c: 0.15, h: 350 }, // pink
   order_lookup: { l: 0.68, c: 0.15, h: 45 }, // orange — fetches a parcel
@@ -388,6 +398,16 @@ export function summarizeNode(
           : truncate(prompt);
       }
       return varKey ? `→ vars.${varKey}` : null;
+    }
+    case 'await_image': {
+      const prompt = typeof cfg.prompt_text === 'string' ? cfg.prompt_text : '';
+      const varKey = typeof cfg.var_key === 'string' ? cfg.var_key : '';
+      if (prompt.length > 0) {
+        return varKey
+          ? `${truncate(prompt, 50)} 📷 → vars.${varKey}`
+          : truncate(prompt);
+      }
+      return varKey ? `📷 → vars.${varKey}` : null;
     }
     case 'condition': {
       const subjectKey =

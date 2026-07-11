@@ -136,6 +136,26 @@ export interface CollectInputNodeConfig {
   next_node_key: string;
 }
 
+/**
+ * Sends a prompt, then suspends until the customer sends an IMAGE (e.g. a
+ * payment screenshot). Any inbound image advances the run; its media URL
+ * is captured into `flow_runs.vars[var_key]` so a downstream handoff note
+ * can reference it. The image twin of collect_input — collect_input waits
+ * for text, await_image waits for a picture.
+ */
+export interface AwaitImageNodeConfig {
+  /** Prompt text sent to the customer before they send the image. */
+  prompt_text: string;
+  /**
+   * Key under which to store the received image's media URL in
+   * `flow_runs.vars`. Optional — when empty the run still advances on an
+   * image, it just doesn't stash the URL.
+   */
+  var_key?: string;
+  /** Node to advance to once an image is received. */
+  next_node_key: string;
+}
+
 export type ConditionOperator =
   | "equals"
   | "contains"
@@ -221,6 +241,7 @@ export type FlowNodeConfig =
   | { node_type: "send_list"; config: SendListNodeConfig }
   | { node_type: "send_media"; config: SendMediaNodeConfig }
   | { node_type: "collect_input"; config: CollectInputNodeConfig }
+  | { node_type: "await_image"; config: AwaitImageNodeConfig }
   | { node_type: "condition"; config: ConditionNodeConfig }
   | { node_type: "set_tag"; config: SetTagNodeConfig }
   | { node_type: "order_lookup"; config: OrderLookupNodeConfig }
@@ -357,6 +378,14 @@ export type ParsedInbound =
       reply_id: string;
       /** The visible title of the tapped option (for logging). */
       reply_title: string;
+      meta_message_id: string;
+    }
+  | {
+      kind: "image";
+      /** Proxy URL of the received image (`/api/whatsapp/media/<id>`). */
+      media_url: string;
+      /** Optional caption the customer sent with the image. */
+      caption?: string;
       meta_message_id: string;
     };
 

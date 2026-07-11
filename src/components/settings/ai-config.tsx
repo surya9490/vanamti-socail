@@ -41,12 +41,27 @@ const HANDOFF_QUEUE = '__queue__';
 const PROVIDER_LABEL: Record<AiProvider, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic (Claude)',
+  gemini: 'Google Gemini',
 };
 
 const KEY_PLACEHOLDER: Record<AiProvider, string> = {
   openai: 'sk-...',
   anthropic: 'sk-ant-...',
+  gemini: 'AIza...',
 };
+
+// Tools the assistant can be given (function calling). Kept in lockstep
+// with the server-side registry in src/lib/ai/tools/registry.ts — the
+// server drops any name not in the registry, so a drift here is harmless.
+// Function calling currently runs on Gemini only.
+const AVAILABLE_TOOLS: { name: string; label: string; description: string }[] = [
+  {
+    name: 'order_lookup',
+    label: 'Order lookup',
+    description:
+      "Let the assistant look up a customer's order status inline, using their phone number and your Vanamati store (needs VANAMATI_APP_URL + VANAMATI_ORDER_STATUS_KEY).",
+  },
+];
 
 export function AiConfig() {
   const { accountId, accountRole, profileLoading } = useAuth();
@@ -72,6 +87,7 @@ export function AiConfig() {
   const [isActive, setIsActive] = useState(false);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(false);
   const [maxPerConversation, setMaxPerConversation] = useState(3);
+  const [enabledTools, setEnabledTools] = useState<string[]>([]);
   // Empty string = leave unassigned (shared queue).
   const [handoffAgentId, setHandoffAgentId] = useState('');
   const [members, setMembers] = useState<AccountMember[]>([]);
@@ -99,6 +115,7 @@ export function AiConfig() {
         setIsActive(data.is_active);
         setAutoReplyEnabled(data.auto_reply_enabled);
         setMaxPerConversation(data.auto_reply_max_per_conversation ?? 3);
+        setEnabledTools(Array.isArray(data.enabled_tools) ? data.enabled_tools : []);
         setHandoffAgentId(data.handoff_agent_id ?? '');
         setHasStoredKey(Boolean(data.has_key));
         setApiKey(data.has_key ? MASKED_KEY : '');
@@ -129,9 +146,8 @@ export function AiConfig() {
   const handleProviderChange = (next: AiProvider) => {
     setProvider(next);
     const isDefaultModel =
-      model === AI_PROVIDER_DEFAULT_MODEL.openai ||
-      model === AI_PROVIDER_DEFAULT_MODEL.anthropic ||
-      model.trim() === '';
+      model.trim() === '' ||
+      Object.values(AI_PROVIDER_DEFAULT_MODEL).includes(model);
     if (isDefaultModel) setModel(AI_PROVIDER_DEFAULT_MODEL[next]);
   };
 
@@ -150,6 +166,7 @@ export function AiConfig() {
     is_active: isActive,
     auto_reply_enabled: autoReplyEnabled,
     auto_reply_max_per_conversation: maxPerConversation,
+    enabled_tools: enabledTools,
     handoff_agent_id: handoffAgentId || null,
   });
 
@@ -281,6 +298,7 @@ export function AiConfig() {
                     <SelectItem value="anthropic">
                       {PROVIDER_LABEL.anthropic}
                     </SelectItem>
+                    <SelectItem value="gemini">{PROVIDER_LABEL.gemini}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -483,6 +501,46 @@ export function AiConfig() {
                 </SelectContent>
               </Select>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">{t('toolsTitle')}</CardTitle>
+            <CardDescription>{t('toolsDesc')}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {AVAILABLE_TOOLS.map((tool) => (
+              <div
+                key={tool.name}
+                className="flex items-center justify-between gap-4 rounded-md border border-border p-3"
+              >
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    {tool.label}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {tool.description}
+                  </p>
+                </div>
+                <Switch
+                  checked={enabledTools.includes(tool.name)}
+                  onCheckedChange={(on) =>
+                    setEnabledTools((prev) =>
+                      on
+                        ? Array.from(new Set([...prev, tool.name]))
+                        : prev.filter((n) => n !== tool.name),
+                    )
+                  }
+                  disabled={disabled || !isActive}
+                />
+              </div>
+            ))}
+            {provider !== 'gemini' && enabledTools.length > 0 && (
+              <p className="text-xs text-amber-600 dark:text-amber-500">
+                {t('toolsGeminiOnly')}
+              </p>
+            )}
           </CardContent>
         </Card>
 

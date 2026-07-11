@@ -7,6 +7,7 @@ import { buildSystemPrompt } from './defaults'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
+import { getEnabledTools, type ToolContext } from './tools/registry'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
@@ -112,10 +113,34 @@ export async function dispatchInboundToAiReply(
       knowledge,
     })
 
+    // Function-calling tools the account has switched on (e.g. order
+    // lookup). Only build the tool context — including one extra query for
+    // the contact's phone — when at least one tool is actually enabled, so
+    // the common no-tools path stays as cheap as before.
+    const tools = getEnabledTools(config.enabledTools)
+    let toolContext: ToolContext | undefined
+    if (tools.length > 0) {
+      const { data: toolContact } = await db
+        .from('contacts')
+        .select('phone')
+        .eq('id', contactId)
+        .eq('account_id', accountId)
+        .maybeSingle()
+      toolContext = {
+        db,
+        accountId,
+        conversationId,
+        contactId,
+        contactPhone: (toolContact as { phone?: string } | null)?.phone ?? null,
+      }
+    }
+
     const { text, handoff, usage } = await generateReply({
       config,
       systemPrompt,
       messages,
+      tools,
+      toolContext,
     })
 
     // Record token spend on the account's BYO key. Fire-and-forget so it

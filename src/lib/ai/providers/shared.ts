@@ -36,6 +36,18 @@ export function normalizeUsage(raw: {
   return { promptTokens, completionTokens, totalTokens }
 }
 
+/** Sum two usage records (either may be null) — used to accumulate token
+ *  spend across the rounds of a tool-calling loop. */
+export function addUsage(a: AiUsage | null, b: AiUsage | null): AiUsage | null {
+  if (!a) return b
+  if (!b) return a
+  return {
+    promptTokens: a.promptTokens + b.promptTokens,
+    completionTokens: a.completionTokens + b.completionTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+  }
+}
+
 /** Map a fetch rejection (timeout / DNS / offline) to a typed AiError. */
 export function toNetworkError(err: unknown): AiError {
   if (err instanceof DOMException && err.name === 'TimeoutError') {

@@ -172,6 +172,12 @@ export function defaultConfigFor(type: NodeType): Record<string, unknown> {
         var_key: "answer",
         next_node_key: "",
       };
+    case "await_image":
+      return {
+        prompt_text: "",
+        var_key: "image_url",
+        next_node_key: "",
+      };
     case "condition":
       return {
         subject: "var",

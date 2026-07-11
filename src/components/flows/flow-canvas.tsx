@@ -698,6 +698,7 @@ const ADD_NODE_TYPES: NodeType[] = [
   'send_message',
   'send_media',
   'collect_input',
+  'await_image',
   'condition',
   'set_tag',
   'order_lookup',

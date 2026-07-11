@@ -584,6 +584,52 @@ function validateNode(
       break;
     }
 
+    case "await_image": {
+      const cfg = node.config as {
+        prompt_text?: string;
+        var_key?: string;
+        next_node_key?: string;
+      };
+      if (!cfg.prompt_text?.trim()) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "prompt_text",
+          message: "Await-image needs a prompt to send the customer.",
+        });
+      }
+      // var_key is optional (the node advances on any image), but when set
+      // it must be a valid vars identifier — same rule collect_input uses.
+      if (cfg.var_key && !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(cfg.var_key)) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "var_key",
+          message: `var_key "${cfg.var_key}" must be alphanumeric+underscore and start with a letter or underscore.`,
+        });
+      }
+      if (!cfg.next_node_key) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: "Await-image must point to a next node.",
+        });
+      } else if (!knownKeys.has(cfg.next_node_key)) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: `Await-image points to non-existent node "${cfg.next_node_key}".`,
+        });
+      }
+      break;
+    }
+
     case "condition": {
       const cfg = node.config as {
         subject?: "var" | "tag" | "contact_field";
@@ -788,6 +834,7 @@ function outgoingEdges(node: NodeInput): string[] {
     case "send_message":
     case "send_media":
     case "collect_input":
+    case "await_image":
     case "set_tag":
     case "order_lookup": {
       const cfg = node.config as { next_node_key?: string };

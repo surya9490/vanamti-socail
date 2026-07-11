@@ -3,10 +3,19 @@
 //
 // One small provider-agnostic surface so the inbox draft route and the
 // inbound auto-reply bot both talk to `generateReply` without caring
-// whether the account is on OpenAI or Anthropic.
+// whether the account is on OpenAI, Anthropic, or Gemini.
 // ============================================================
 
-export type AiProvider = 'openai' | 'anthropic'
+export type AiProvider = 'openai' | 'anthropic' | 'gemini'
+
+/** Every provider the assistant supports. Single source of truth for the
+ *  config/test route validators and the settings UI. */
+export const AI_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const
+
+/** Runtime guard for untrusted `provider` values off the request body. */
+export function isAiProvider(v: unknown): v is AiProvider {
+  return typeof v === 'string' && (AI_PROVIDERS as readonly string[]).includes(v)
+}
 
 /**
  * Account AI setup, decrypted and ready to use. Produced by
@@ -29,6 +38,10 @@ export interface AiConfig {
    *  knowledge base is embedded and semantic retrieval turns on; when
    *  null, retrieval falls back to lexical full-text search. */
   embeddingsApiKey: string | null
+  /** Names of the tools (function-calling actions) this account has
+   *  enabled — a subset of the tool registry. Empty = no tools. Currently
+   *  honoured by the Gemini provider only. */
+  enabledTools: string[]
 }
 
 /** A single conversation turn in the shape both providers accept. */

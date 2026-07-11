@@ -47,6 +47,7 @@ import {
   fetchOrderStatusReply,
 } from "@/lib/orders/order-tracking";
 import {
+  type AwaitImageNodeConfig,
   type CollectInputNodeConfig,
   type ConditionNodeConfig,
   type DispatchInboundInput,
@@ -164,7 +165,8 @@ export function isSuspending(node_type: string): boolean {
   return (
     node_type === "send_buttons" ||
     node_type === "send_list" ||
-    node_type === "collect_input"
+    node_type === "collect_input" ||
+    node_type === "await_image"
   );
 }
 
@@ -785,6 +787,55 @@ async function advanceFromNodeKey(
       }
       return { outcome: "advanced" };
     }
+    if (node.node_type === "await_image") {
+      // Send the prompt and suspend. The customer's next IMAGE (e.g. a
+      // payment screenshot) will wake us up via handleReplyForActiveRun's
+      // await_image branch.
+      const cfg = node.config as unknown as AwaitImageNodeConfig;
+      try {
+        const { whatsapp_message_id } = await engineSendText({
+          accountId: run.account_id,
+          userId: run.user_id,
+          conversationId: run.conversation_id!,
+          contactId: run.contact_id!,
+          text: interpolateVars(cfg.prompt_text, run.vars),
+        });
+        await logEvent(db, run.id, "message_sent", node.node_key, {
+          node_type: "await_image",
+          whatsapp_message_id,
+        });
+        const { data: msg } = await db
+          .from("messages")
+          .select("id")
+          .eq("message_id", whatsapp_message_id)
+          .maybeSingle();
+        await db
+          .from("flow_runs")
+          .update({
+            last_prompt_message_id: (msg as { id: string } | null)?.id ?? null,
+          })
+          .eq("id", run.id);
+      } catch (err) {
+        await logEvent(db, run.id, "error", node.node_key, {
+          reason: "await_image_prompt_failed",
+          detail: err instanceof Error ? err.message : String(err),
+        });
+        await endRun(db, run.id, "failed", "await_image_prompt_failed");
+        return { outcome: "completed" };
+      }
+      const advanced = await advanceCurrentNodeKey(
+        db,
+        run.id,
+        run.current_node_key,
+        node.node_key,
+      );
+      if (!advanced) {
+        await logEvent(db, run.id, "error", node.node_key, {
+          reason: "lost_race_during_advance",
+        });
+      }
+      return { outcome: "advanced" };
+    }
     if (node.node_type === "condition") {
       const cfg = node.config as unknown as ConditionNodeConfig;
       let branch: "true" | "false";
@@ -1022,9 +1073,10 @@ async function handleReplyForActiveRun(
     return { consumed: true, flow_run_id: run.id, outcome: "no_match" };
   }
 
-  // Two ways a reply can advance:
+  // Ways a reply can advance:
   //   1. Interactive button/list tap on a send_buttons/send_list node.
   //   2. Text reply on a collect_input node — capture into vars.
+  //   3. Image on an await_image node — capture its media_url into vars.
   //
   // Everything else falls through to the fallback policy below.
   let matched: string | null = null;
@@ -1034,6 +1086,32 @@ async function handleReplyForActiveRun(
       currentNode.node_type === "send_list")
   ) {
     matched = matchReplyId(currentNode, message.reply_id);
+  } else if (
+    message.kind === "image" &&
+    currentNode.node_type === "await_image"
+  ) {
+    const cfg = currentNode.config as unknown as AwaitImageNodeConfig;
+    // Any inbound image counts as the awaited upload. Best-effort capture
+    // of the media_url into vars when a key is configured; a transient
+    // write failure must NOT strand the customer at "send the screenshot",
+    // so we advance regardless (unlike collect_input, where an empty text
+    // is a genuine non-answer).
+    if (cfg.var_key) {
+      const newVars = { ...run.vars, [cfg.var_key]: message.media_url };
+      const { error: capErr } = await db
+        .from("flow_runs")
+        .update({ vars: newVars, reprompt_count: 0 })
+        .eq("id", run.id);
+      if (!capErr) {
+        run.vars = newVars;
+        run.reprompt_count = 0;
+      }
+    }
+    await logEvent(db, run.id, "node_entered", currentNode.node_key, {
+      captured_key: cfg.var_key ?? null,
+      captured_kind: "image",
+    });
+    matched = cfg.next_node_key;
   } else if (
     message.kind === "text" &&
     currentNode.node_type === "collect_input"
@@ -1121,6 +1199,24 @@ async function handleReplyForActiveRun(
         await engineSendText({
           accountId: run.account_id,
     userId: run.user_id,
+          conversationId: run.conversation_id!,
+          contactId: run.contact_id!,
+          text: interpolateVars(cfg.prompt_text, run.vars),
+        });
+      } catch (err) {
+        await logEvent(db, run.id, "error", currentNode.node_key, {
+          reason: "reprompt_send_failed",
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } else if (currentNode.node_type === "await_image") {
+      // Customer sent text/tapped instead of an image — re-ask for the
+      // picture (e.g. the payment screenshot).
+      const cfg = currentNode.config as unknown as AwaitImageNodeConfig;
+      try {
+        await engineSendText({
+          accountId: run.account_id,
+          userId: run.user_id,
           conversationId: run.conversation_id!,
           contactId: run.contact_id!,
           text: interpolateVars(cfg.prompt_text, run.vars),

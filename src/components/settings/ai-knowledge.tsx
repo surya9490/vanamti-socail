@@ -2,7 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { Loader2, Plus, Trash2, Pencil, RefreshCw, BookOpen } from 'lucide-react';
+import {
+  Loader2,
+  Plus,
+  Trash2,
+  Pencil,
+  RefreshCw,
+  BookOpen,
+  Globe,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -19,6 +27,7 @@ import { useTranslations } from 'next-intl';
 interface DocSummary {
   id: string;
   title: string;
+  source_type?: 'manual' | 'website';
   updated_at: string;
 }
 
@@ -41,6 +50,9 @@ export function AiKnowledgeCard({
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [reindexing, setReindexing] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importUrl, setImportUrl] = useState('');
+  const [importing, setImporting] = useState(false);
   const loadedAccountIdRef = useRef<string | null>(null);
   const t = useTranslations('Settings.aiKnowledge');
 
@@ -140,6 +152,42 @@ export function AiKnowledgeCard({
     }
   };
 
+  const runImport = async () => {
+    const url = importUrl.trim();
+    if (!url) {
+      toast.error(t('importUrlRequired'));
+      return;
+    }
+    setImporting(true);
+    try {
+      const res = await fetch('/api/ai/knowledge/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        if (data.warning) toast.warning(data.warning);
+        else
+          toast.success(
+            t('importSuccess', {
+              imported: data.imported ?? 0,
+              updated: data.updated ?? 0,
+            }),
+          );
+        setImportOpen(false);
+        setImportUrl('');
+        await fetchDocs();
+      } else {
+        toast.error(data.error ?? t('importFailed'));
+      }
+    } catch {
+      toast.error(t('importFailed'));
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const reindex = async () => {
     setReindexing(true);
     try {
@@ -189,8 +237,18 @@ export function AiKnowledgeCard({
                     key={doc.id}
                     className="flex items-center justify-between gap-2 px-3 py-2"
                   >
-                    <span className="min-w-0 truncate text-sm text-foreground">
-                      {doc.title}
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="min-w-0 truncate text-sm text-foreground">
+                        {doc.title}
+                      </span>
+                      {doc.source_type === 'website' && (
+                        <span
+                          className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground"
+                          title={t('sourceWebsite')}
+                        >
+                          <Globe className="h-3 w-3" /> {t('sourceWebsite')}
+                        </span>
+                      )}
                     </span>
                     {canEdit && (
                       <span className="flex shrink-0 gap-1">
@@ -254,26 +312,71 @@ export function AiKnowledgeCard({
               </div>
             ) : (
               canEdit && (
-                <div className="flex items-center justify-between">
-                  <Button variant="outline" size="sm" onClick={openNew}>
-                    <Plus className="mr-2 h-4 w-4" /> {t('addDoc')}
-                  </Button>
-                  {hasEmbeddingsKey && docs.length > 0 && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={reindex}
-                      disabled={reindexing}
-                      title={t('reindexTooltip')}
-                    >
-                      {reindexing ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                      )}
-                      {t('reindex')}
-                    </Button>
+                <div className="space-y-3">
+                  {importOpen && (
+                    <div className="space-y-2 rounded-md border border-border p-3">
+                      <Label htmlFor="kb-import-url">{t('importUrlLabel')}</Label>
+                      <Input
+                        id="kb-import-url"
+                        type="url"
+                        value={importUrl}
+                        onChange={(e) => setImportUrl(e.target.value)}
+                        placeholder="https://vanamati.com"
+                        disabled={importing}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {t('importHint')}
+                      </p>
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          onClick={() => {
+                            setImportOpen(false);
+                            setImportUrl('');
+                          }}
+                          disabled={importing}
+                        >
+                          {t('cancel')}
+                        </Button>
+                        <Button onClick={runImport} disabled={importing}>
+                          {importing && (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          )}
+                          {t('importButton')}
+                        </Button>
+                      </div>
+                    </div>
                   )}
+                  <div className="flex items-center justify-between">
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={openNew}>
+                        <Plus className="mr-2 h-4 w-4" /> {t('addDoc')}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setImportOpen((v) => !v)}
+                      >
+                        <Globe className="mr-2 h-4 w-4" /> {t('importDoc')}
+                      </Button>
+                    </div>
+                    {hasEmbeddingsKey && docs.length > 0 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={reindex}
+                        disabled={reindexing}
+                        title={t('reindexTooltip')}
+                      >
+                        {reindexing ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                        )}
+                        {t('reindex')}
+                      </Button>
+                    )}
+                  </div>
                 </div>
               )
             )}

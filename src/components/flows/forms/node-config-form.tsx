@@ -173,6 +173,43 @@ export function NodeConfigForm({
         </>
       );
 
+    case "await_image":
+      return (
+        <>
+          <TextRow
+            label={t("promptToCustomer")}
+            value={(cfg as { prompt_text?: string }).prompt_text ?? ""}
+            onChange={(v) => onUpdateConfig({ prompt_text: v })}
+            rows={2}
+          />
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              {t("varKeyLabel")}
+            </label>
+            <Input
+              value={(cfg as { var_key?: string }).var_key ?? ""}
+              onChange={(e) =>
+                onUpdateConfig({
+                  var_key: e.target.value.replace(/[^a-zA-Z0-9_]/g, ""),
+                })
+              }
+              placeholder="image_url"
+              className="bg-muted font-mono text-xs"
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {t("awaitImageHelp")}
+            </p>
+          </div>
+          <NextNodeRow
+            value={(cfg as { next_node_key?: string }).next_node_key ?? ""}
+            allNodes={allNodes}
+            currentKey={node.node_key}
+            onChange={(v) => onUpdateConfig({ next_node_key: v })}
+            label={t("advanceAfterImage")}
+          />
+        </>
+      );
+
     case "condition":
       return (
         <ConditionForm

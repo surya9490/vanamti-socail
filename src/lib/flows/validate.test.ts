@@ -516,6 +516,78 @@ describe("validateFlowForActivation — send_media", () => {
   });
 });
 
+describe("validateFlowForActivation — await_image", () => {
+  const baseFlow = { ...validFlow, entry_node_id: "s" };
+  const nodesWith = (imageConfig: Record<string, unknown>) => [
+    { node_key: "s", node_type: "start", config: { next_node_key: "a" } },
+    { node_key: "a", node_type: "await_image", config: imageConfig },
+    { node_key: "h", node_type: "handoff", config: {} },
+  ];
+
+  it("passes on a fully-populated await_image node", () => {
+    const issues = validateFlowForActivation(
+      baseFlow,
+      nodesWith({
+        prompt_text: "Send your payment screenshot",
+        var_key: "payment_proof",
+        next_node_key: "h",
+      }),
+    );
+    expect(issues).toEqual([]);
+  });
+
+  it("passes without a var_key (optional)", () => {
+    const issues = validateFlowForActivation(
+      baseFlow,
+      nodesWith({ prompt_text: "Send a photo", next_node_key: "h" }),
+    );
+    expect(issues).toEqual([]);
+  });
+
+  it("flags missing prompt_text", () => {
+    const issues = validateFlowForActivation(
+      baseFlow,
+      nodesWith({ prompt_text: "", next_node_key: "h" }),
+    );
+    expect(
+      issues.some((i) => i.node_key === "a" && i.field === "prompt_text"),
+    ).toBe(true);
+  });
+
+  it("flags an invalid var_key", () => {
+    const issues = validateFlowForActivation(
+      baseFlow,
+      nodesWith({ prompt_text: "Send a photo", var_key: "1bad", next_node_key: "h" }),
+    );
+    expect(
+      issues.some((i) => i.node_key === "a" && i.field === "var_key"),
+    ).toBe(true);
+  });
+
+  it("flags next_node_key pointing at a non-existent node", () => {
+    const issues = validateFlowForActivation(
+      baseFlow,
+      nodesWith({ prompt_text: "Send a photo", next_node_key: "ghost" }),
+    );
+    expect(
+      issues.some(
+        (i) =>
+          i.node_key === "a" &&
+          i.field === "next_node_key" &&
+          i.message.includes("ghost"),
+      ),
+    ).toBe(true);
+  });
+
+  it("contributes its next_node_key to reachability", () => {
+    const set = reachableFromEntry(
+      "s",
+      nodesWith({ prompt_text: "Send a photo", next_node_key: "h" }),
+    );
+    expect(set).toEqual(new Set(["s", "a", "h"]));
+  });
+});
+
 describe("reachableFromEntry", () => {
   it("walks the graph from the entry", () => {
     const set = reachableFromEntry("start", validNodes);

@@ -8,6 +8,8 @@ import {
 import { HANDOFF_SENTINEL, aiRequestTimeoutMs } from './defaults'
 import { generateOpenAi } from './providers/openai'
 import { generateAnthropic } from './providers/anthropic'
+import { generateGemini, generateGeminiWithTools } from './providers/gemini'
+import type { AiTool, ToolContext } from './tools/registry'
 
 export interface GenerateArgs {
   config: AiConfig
@@ -15,6 +17,12 @@ export interface GenerateArgs {
   systemPrompt: string
   /** Recent conversation turns, oldest first. */
   messages: ChatMessage[]
+  /** Function-calling tools to offer the model. Currently honoured by the
+   *  Gemini provider only; ignored for others (they answer text-only). */
+  tools?: AiTool[]
+  /** Per-conversation context passed to a tool's `run`. Required when
+   *  `tools` is non-empty. */
+  toolContext?: ToolContext
 }
 
 /**
@@ -34,18 +42,37 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
   }
 
   let result: { text: string; usage: AiUsage | null }
-  switch (config.provider) {
-    case 'openai':
-      result = await generateOpenAi(providerArgs)
-      break
-    case 'anthropic':
-      result = await generateAnthropic(providerArgs)
-      break
-    default:
-      throw new AiError(`Unsupported AI provider: ${config.provider}`, {
-        code: 'unsupported_provider',
-        status: 400,
-      })
+  // Tool (function) calling is Gemini-only for now. When tools are enabled
+  // and we're on Gemini, run the tool loop; every other case is a single
+  // text generation (other providers ignore any tools passed).
+  if (
+    config.provider === 'gemini' &&
+    args.tools &&
+    args.tools.length > 0 &&
+    args.toolContext
+  ) {
+    result = await generateGeminiWithTools({
+      ...providerArgs,
+      tools: args.tools,
+      toolContext: args.toolContext,
+    })
+  } else {
+    switch (config.provider) {
+      case 'openai':
+        result = await generateOpenAi(providerArgs)
+        break
+      case 'anthropic':
+        result = await generateAnthropic(providerArgs)
+        break
+      case 'gemini':
+        result = await generateGemini(providerArgs)
+        break
+      default:
+        throw new AiError(`Unsupported AI provider: ${config.provider}`, {
+          code: 'unsupported_provider',
+          status: 400,
+        })
+    }
   }
 
   return parseGeneration(result.text, result.usage)

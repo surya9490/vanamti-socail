@@ -3,7 +3,7 @@ import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { validateAiCredentials } from '@/lib/ai/validate'
-import { AiError, type AiProvider } from '@/lib/ai/types'
+import { AiError, isAiProvider, type AiProvider } from '@/lib/ai/types'
 
 /**
  * POST /api/ai/test  (admin+)
@@ -26,13 +26,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
     }
 
-    const provider = body.provider as AiProvider
-    if (provider !== 'openai' && provider !== 'anthropic') {
+    if (!isAiProvider(body.provider)) {
       return NextResponse.json(
-        { error: 'provider must be "openai" or "anthropic"' },
+        { error: 'provider must be "openai", "anthropic", or "gemini"' },
         { status: 400 },
       )
     }
+    const provider: AiProvider = body.provider
     const model = typeof body.model === 'string' ? body.model.trim() : ''
     if (!model) {
       return NextResponse.json({ error: 'model is required' }, { status: 400 })
@@ -73,6 +73,7 @@ export async function POST(request: Request) {
         autoReplyMaxPerConversation: 3,
         handoffAgentId: null,
         embeddingsApiKey: null,
+        enabledTools: [],
       })
     } catch (err) {
       if (err instanceof AiError) {

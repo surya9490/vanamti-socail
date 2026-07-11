@@ -820,11 +820,21 @@ async function processMessage(
             reply_title: contentText ?? '',
             meta_message_id: message.id,
           }
-        : {
-            kind: 'text',
-            text: contentText ?? message.text?.body ?? '',
-            meta_message_id: message.id,
-          },
+        : contentType === 'image' && mediaUrl
+          ? {
+              // Inbound image (e.g. a payment screenshot) — surfaced to the
+              // flow runner so an `await_image` node can advance on it. A
+              // captionless image used to collapse to empty text and drop.
+              kind: 'image',
+              media_url: mediaUrl,
+              caption: contentText ?? undefined,
+              meta_message_id: message.id,
+            }
+          : {
+              kind: 'text',
+              text: contentText ?? message.text?.body ?? '',
+              meta_message_id: message.id,
+            },
     isFirstInboundMessage,
   })
   const flowConsumed = flowResult.consumed

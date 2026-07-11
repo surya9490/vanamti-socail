@@ -8,7 +8,8 @@ import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import { validateAiCredentials } from '@/lib/ai/validate'
 import { embedTexts } from '@/lib/ai/embeddings'
-import { AiError, type AiProvider } from '@/lib/ai/types'
+import { AiError, isAiProvider, type AiProvider } from '@/lib/ai/types'
+import { isKnownTool } from '@/lib/ai/tools/registry'
 
 function bad(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
@@ -30,7 +31,7 @@ export async function GET() {
       // `api_key` is selected only to derive `has_key` — it is stripped
       // out below and never returned to the client.
       .select(
-        'provider, model, system_prompt, is_active, auto_reply_enabled, auto_reply_max_per_conversation, handoff_agent_id, api_key, embeddings_api_key',
+        'provider, model, system_prompt, is_active, auto_reply_enabled, auto_reply_max_per_conversation, handoff_agent_id, api_key, embeddings_api_key, enabled_tools',
       )
       .eq('account_id', accountId)
       .maybeSingle()
@@ -77,10 +78,10 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null)
     if (!body || typeof body !== 'object') return bad('Invalid request body')
 
-    const provider = body.provider as AiProvider
-    if (provider !== 'openai' && provider !== 'anthropic') {
-      return bad('provider must be "openai" or "anthropic"')
+    if (!isAiProvider(body.provider)) {
+      return bad('provider must be "openai", "anthropic", or "gemini"')
     }
+    const provider: AiProvider = body.provider
     const model = typeof body.model === 'string' ? body.model.trim() : ''
     if (!model) return bad('model is required')
 
@@ -113,6 +114,16 @@ export async function POST(request: Request) {
       if (!member) return bad('handoff_agent_id must be a member of this account')
       handoffAgentId = rawHandoff
     }
+
+    // Enabled tools (optional): keep only names that exist in the tool
+    // registry, dropping anything unknown so a bad/stale value can never
+    // reach the model. Only touched when the form actually sends the field.
+    const toolsProvided = 'enabled_tools' in body
+    const enabledTools = Array.isArray(body.enabled_tools)
+      ? (body.enabled_tools as unknown[]).filter(
+          (n): n is string => typeof n === 'string' && isKnownTool(n),
+        )
+      : []
 
     const rawKey = typeof body.api_key === 'string' ? body.api_key.trim() : ''
 
@@ -167,6 +178,7 @@ export async function POST(request: Request) {
           autoReplyMaxPerConversation: maxPer,
           handoffAgentId: null,
           embeddingsApiKey: null,
+          enabledTools: [],
         })
       } catch (err) {
         if (err instanceof AiError) {
@@ -209,6 +221,7 @@ export async function POST(request: Request) {
     // Only touch the handoff target when the form actually sent the field,
     // so a partial save (e.g. flipping a toggle) doesn't wipe it.
     if (handoffProvided) shared.handoff_agent_id = handoffAgentId
+    if (toolsProvided) shared.enabled_tools = enabledTools
     if (rawEmbeddingsKey) {
       shared.embeddings_api_key = encrypt(rawEmbeddingsKey)
     } else if (clearEmbeddingsKey) {

@@ -20,12 +20,14 @@
  */
 
 import type {
+  AwaitImageNodeConfig,
   CollectInputNodeConfig,
   ConditionNodeConfig,
   HandoffNodeConfig,
   KeywordTriggerConfig,
   SendButtonsNodeConfig,
   SendListNodeConfig,
+  SendMediaNodeConfig,
   SendMessageNodeConfig,
   StartNodeConfig,
 } from "./types";
@@ -35,7 +37,9 @@ export type FlowTemplateNodeType =
   | "send_message"
   | "send_buttons"
   | "send_list"
+  | "send_media"
   | "collect_input"
+  | "await_image"
   | "condition"
   | "set_tag"
   | "handoff"
@@ -49,7 +53,9 @@ export interface FlowTemplateNode {
     | SendMessageNodeConfig
     | SendButtonsNodeConfig
     | SendListNodeConfig
+    | SendMediaNodeConfig
     | CollectInputNodeConfig
+    | AwaitImageNodeConfig
     | ConditionNodeConfig
     | HandoffNodeConfig
     | Record<string, unknown>;
@@ -535,6 +541,82 @@ const VANAMATI_STORE: FlowTemplate = {
 };
 
 // ============================================================
+// 5. Vanamati — order & pay: QR → payment screenshot → thank-you → alert
+// ============================================================
+const VANAMATI_ORDER_PAY: FlowTemplate = {
+  slug: "vanamati_order_pay",
+  name: "Vanamati — order & pay",
+  description:
+    "Customer types 'order' → the bot shows your payment QR, waits for the payment screenshot, thanks them, and drops the chat into the pending queue for your team to verify and dispatch. Upload your UPI/payment QR to the 'Send media' step before activating.",
+  icon: "MessageSquare",
+  trigger_type: "keyword",
+  trigger_config: {
+    keywords: ["order", "buy", "place order", "pay"],
+    match_type: "contains",
+  },
+  entry_node_id: "start",
+  nodes: [
+    {
+      node_key: "start",
+      node_type: "start",
+      config: { next_node_key: "pay_intro" },
+    },
+    {
+      node_key: "pay_intro",
+      node_type: "send_message",
+      config: {
+        text:
+          "🛒 Wonderful! To place your order, scan the QR below to pay. Once you've paid, send a screenshot of the payment here and we'll get your order dispatched. 🍯",
+        next_node_key: "qr",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "qr",
+      node_type: "send_media",
+      config: {
+        media_type: "image",
+        // ⬆️ Upload your payment / UPI QR image to this step in the builder
+        // before activating the flow.
+        media_url: "",
+        caption: "Scan to pay via UPI or your preferred app.",
+        filename: "",
+        next_node_key: "await_screenshot",
+      } as SendMediaNodeConfig,
+    },
+    {
+      node_key: "await_screenshot",
+      node_type: "await_image",
+      config: {
+        prompt_text:
+          "📸 After paying, please send a screenshot of the completed payment here.",
+        var_key: "payment_proof",
+        next_node_key: "thank_you",
+      } as AwaitImageNodeConfig,
+    },
+    {
+      node_key: "thank_you",
+      node_type: "send_message",
+      config: {
+        text:
+          "🙏 Thank you! We've received your payment screenshot. Your order will be dispatched shortly — our team will confirm the delivery details with you right here.",
+        next_node_key: "notify_team",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "notify_team",
+      node_type: "handoff",
+      config: {
+        // Ends the run and moves the conversation to the pending queue so
+        // your team sees it (the incoming screenshot also raises the
+        // normal new-message notification). Optionally set an assignee in
+        // the builder to route it to a specific person.
+        note: "💰 Payment screenshot received (saved to the chat as vars.payment_proof). Verify the payment and dispatch the order.",
+      } as HandoffNodeConfig,
+    },
+  ],
+};
+
+// ============================================================
 // Registry
 // ============================================================
 
@@ -543,6 +625,7 @@ const TEMPLATES: Record<string, FlowTemplate> = {
   faq_bot: FAQ_BOT,
   lead_capture: LEAD_CAPTURE,
   vanamati_store: VANAMATI_STORE,
+  vanamati_order_pay: VANAMATI_ORDER_PAY,
 };
 
 export function getFlowTemplate(slug: string): FlowTemplate | null {
