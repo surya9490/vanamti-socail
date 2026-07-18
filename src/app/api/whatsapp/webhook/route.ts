@@ -63,6 +63,14 @@ interface WhatsAppMessage {
     button_reply?: { id: string; title: string }
     list_reply?: { id: string; title: string; description?: string }
   }
+  /**
+   * Set when the customer taps a quick-reply button on a TEMPLATE message
+   * (a different webhook shape from `interactive`): `text` is the visible
+   * label, `payload` is the button's configured payload. We treat it like
+   * an interactive reply so the inbox shows the label and flows /
+   * automations can route on it.
+   */
+  button?: { text?: string; payload?: string }
   /** Present when the customer swipe-replies to one of our messages. */
   context?: { id: string }
 }
@@ -661,8 +669,10 @@ async function processMessage(
   const contentType = ALLOWED_CONTENT_TYPES.has(message.type)
     ? message.type
     : message.type === 'sticker'
-      ? 'image'   // stickers are images
-      : 'text'    // reaction, unknown → text fallback
+      ? 'image'        // stickers are images
+      : message.type === 'button'
+        ? 'interactive' // template quick-reply tap → store like an interactive reply
+        : 'text'        // reaction, unknown → text fallback
 
   // Determine whether this is the contact's very first inbound message
   // BEFORE we insert, so the count is accurate. Covers the case where
@@ -1052,6 +1062,17 @@ async function parseMessageContent(
         }
       }
       return { ...empty, contentText: '[Interactive reply]' }
+    }
+
+    case 'button': {
+      // The customer tapped a quick-reply button on a TEMPLATE message.
+      // Meta sends `button.text` (label) + `button.payload`. Show the label
+      // in the inbox and expose the payload as the reply id so flows /
+      // automations (interactive_reply trigger) can route on it — same as a
+      // native interactive button.
+      const label = message.button?.text || message.button?.payload || null
+      const payload = message.button?.payload || message.button?.text || null
+      return { ...empty, contentText: label, interactiveReplyId: payload }
     }
 
     default:

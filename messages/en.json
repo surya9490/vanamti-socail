@@ -1158,6 +1158,10 @@
           "label": "Collect input",
           "blurb": "Asks a question, saves the reply"
         },
+        "await_image": {
+          "label": "Receive image",
+          "blurb": "Waits for a photo (e.g. payment screenshot)"
+        },
         "condition": {
           "label": "If / else",
           "blurb": "Branches on a rule"

@@ -1,7 +1,7 @@
 /**
  * Starter flow templates.
  *
- * Three pre-canned flows users can clone with one click instead of
+ * A set of pre-canned flows users can clone with one click instead of
  * building from scratch. Each template is a plain JS object describing
  * the same shape `/api/flows` PUT accepts — name, trigger config,
  * entry_node_id, fallback_policy, nodes[] — keyed by a stable
@@ -25,6 +25,7 @@ import type {
   ConditionNodeConfig,
   HandoffNodeConfig,
   KeywordTriggerConfig,
+  OrderLookupNodeConfig,
   SendButtonsNodeConfig,
   SendListNodeConfig,
   SendMediaNodeConfig,
@@ -42,6 +43,7 @@ export type FlowTemplateNodeType =
   | "await_image"
   | "condition"
   | "set_tag"
+  | "order_lookup"
   | "handoff"
   | "end";
 
@@ -57,6 +59,7 @@ export interface FlowTemplateNode {
     | CollectInputNodeConfig
     | AwaitImageNodeConfig
     | ConditionNodeConfig
+    | OrderLookupNodeConfig
     | HandoffNodeConfig
     | Record<string, unknown>;
 }
@@ -292,139 +295,291 @@ const LEAD_CAPTURE: FlowTemplate = {
 };
 
 // ============================================================
-// 4. Vanamati — welcome new customer, show product menu, capture interest
+// 4. Vanamati — full shop & order flow
+//
+// Menu (Honey / Ghee / Help) → product list with live prices →
+// collect address → send payment QR → capture payment screenshot →
+// thank-you → hand off to the team to verify & dispatch. Plus an
+// order-tracking command and an FAQ branch.
+//
+// Prices are a snapshot from the Vanamati Shopify store (Forest,
+// Acacia, Multifloral honey + A2 Bilona ghee); update the list rows
+// here if store prices change. The QR step ships with an empty media
+// URL — upload your UPI/payment QR to it in the builder before
+// activating (validation will flag it until you do).
+//
+// Trigger: keyword "starts with" — fires on greetings (hi/hello/…) AND
+// command words (menu/order/shop/honey/ghee/track), so customers can
+// either say hi or type a command to open the shop.
 // ============================================================
 const VANAMATI_STORE: FlowTemplate = {
   slug: "vanamati_store",
-  name: "Vanamati — product menu",
+  name: "Vanamati — shop & order",
   description:
-    "Greet every first-time customer with the Vanamati product menu (honey + ghee variants) and an FAQ shortcut. Tapping a product logs interest and hands off to a human for order confirmation.",
+    "The full storefront: greet on hi/menu/order, show the honey & ghee menu with prices, take the delivery address, send your payment QR, capture the payment screenshot, thank the customer, and hand the order to your team to verify & dispatch. Includes order tracking + FAQs. Upload your payment QR to the 'Send media' step before activating.",
   icon: "MessageSquare",
-  trigger_type: "first_inbound_message",
-  trigger_config: {},
+  trigger_type: "keyword",
+  trigger_config: {
+    keywords: [
+      "hi",
+      "hello",
+      "hey",
+      "namaste",
+      "hola",
+      "menu",
+      "order",
+      "buy",
+      "shop",
+      "honey",
+      "ghee",
+      "price",
+      "prices",
+      "catalog",
+    ],
+    match_type: "starts_with",
+  },
   entry_node_id: "start",
   nodes: [
     {
       node_key: "start",
       node_type: "start",
-      config: { next_node_key: "welcome" },
+      config: { next_node_key: "category_menu" },
     },
+    // ---- Main menu: Honey / Ghee / Help ----
     {
-      node_key: "welcome",
-      node_type: "send_message",
+      node_key: "category_menu",
+      node_type: "send_buttons",
       config: {
         text:
-          "🙏 Welcome to Vanamati — pure, natural honey and A2 ghee, sourced straight from small farms with no additives.\n\nHere's what we currently offer:",
-        next_node_key: "menu",
-      } as SendMessageNodeConfig,
+          "🙏 Welcome to Vanamati!\n\nPure, raw honey & A2 Bilona ghee — straight from the farm, no additives. What would you like?",
+        footer_text: "Tap a category to begin.",
+        buttons: [
+          { reply_id: "cat_honey", title: "🍯 Honey", next_node_key: "honey_menu" },
+          { reply_id: "cat_ghee", title: "🧈 Ghee", next_node_key: "ghee_menu" },
+          {
+            reply_id: "cat_help",
+            title: "📦 Track / Help",
+            next_node_key: "help_menu",
+          },
+        ],
+      } as SendButtonsNodeConfig,
     },
+    // ---- Honey list (3 types × 3 sizes = 9 rows, ≤10 limit) ----
     {
-      node_key: "menu",
+      node_key: "honey_menu",
       node_type: "send_list",
       config: {
-        text: "Tap a product to know more or place an order. Our team will reach out to confirm.",
-        button_label: "View menu",
-        footer_text: "All prices in ₹. Free shipping on orders above ₹999.",
+        text: "Our honey — tap a size to order. All raw, unfiltered & single-origin. 🐝",
+        button_label: "View honey",
+        footer_text: "Prices in ₹. Pick any to continue.",
         sections: [
           {
-            title: "Honey",
+            title: "Forest Honey (Coorg)",
             rows: [
               {
-                reply_id: "honey_acacia_1000",
-                title: "Acacia Honey 1L",
-                description: "₹999 · 1000ml · Mild floral notes",
-                next_node_key: "interest_captured",
+                reply_id: "forest_250",
+                title: "250ml — ₹549",
+                description: "Wild honey from the Coorg forests",
+                next_node_key: "collect_address",
               },
               {
-                reply_id: "honey_acacia_500",
-                title: "Acacia Honey 500ml",
-                description: "₹599 · 500ml",
-                next_node_key: "interest_captured",
+                reply_id: "forest_500",
+                title: "500ml — ₹999",
+                description: "Wild honey from the Coorg forests",
+                next_node_key: "collect_address",
               },
               {
-                reply_id: "honey_acacia_250",
-                title: "Acacia Honey 250ml",
-                description: "₹299 · 250ml · Try-me size",
-                next_node_key: "interest_captured",
-              },
-              {
-                reply_id: "honey_multi_1000",
-                title: "Multi Floral 1L",
-                description: "₹899 · 1000ml · Rich wildflower",
-                next_node_key: "interest_captured",
-              },
-              {
-                reply_id: "honey_multi_500",
-                title: "Multi Floral 500ml",
-                description: "₹549 · 500ml",
-                next_node_key: "interest_captured",
-              },
-              {
-                reply_id: "honey_multi_250",
-                title: "Multi Floral 250ml",
-                description: "₹249 · 250ml · Try-me size",
-                next_node_key: "interest_captured",
+                reply_id: "forest_1000",
+                title: "1000ml — ₹1799",
+                description: "Wild honey from the Coorg forests",
+                next_node_key: "collect_address",
               },
             ],
           },
           {
-            title: "Ghee",
+            title: "Acacia Honey",
             rows: [
               {
-                reply_id: "ghee_1000",
-                title: "A2 Ghee 1L",
-                description: "₹1999 · 1000ml · Hand-churned",
-                next_node_key: "interest_captured",
+                reply_id: "acacia_250",
+                title: "250ml — ₹349",
+                description: "Light, mild & delicately sweet",
+                next_node_key: "collect_address",
               },
               {
-                reply_id: "ghee_500",
-                title: "A2 Ghee 500ml",
-                description: "₹1099 · 500ml",
-                next_node_key: "interest_captured",
+                reply_id: "acacia_500",
+                title: "500ml — ₹699",
+                description: "Light, mild & delicately sweet",
+                next_node_key: "collect_address",
               },
               {
-                reply_id: "ghee_250",
-                title: "A2 Ghee 250ml",
-                description: "₹599 · 250ml · Try-me size",
-                next_node_key: "interest_captured",
+                reply_id: "acacia_1000",
+                title: "1000ml — ₹1299",
+                description: "Light, mild & delicately sweet",
+                next_node_key: "collect_address",
               },
             ],
           },
           {
-            title: "Help",
+            title: "Multifloral Honey",
             rows: [
               {
-                reply_id: "faq",
-                title: "FAQs",
-                description: "Answers to common questions",
-                next_node_key: "faq_menu",
+                reply_id: "multi_250",
+                title: "250ml — ₹299",
+                description: "Everyday wildflower honey",
+                next_node_key: "collect_address",
+              },
+              {
+                reply_id: "multi_500",
+                title: "500ml — ₹649",
+                description: "Everyday wildflower honey",
+                next_node_key: "collect_address",
+              },
+              {
+                reply_id: "multi_1000",
+                title: "1000ml — ₹1099",
+                description: "Everyday wildflower honey",
+                next_node_key: "collect_address",
               },
             ],
           },
         ],
       } as SendListNodeConfig,
     },
+    // ---- Ghee list ----
     {
-      node_key: "interest_captured",
+      node_key: "ghee_menu",
+      node_type: "send_list",
+      config: {
+        text: "Our A2 Cow Ghee — traditional Bilona method, from indigenous desi cows. 🧈",
+        button_label: "View ghee",
+        footer_text: "Prices in ₹. Pick a size to order.",
+        sections: [
+          {
+            title: "A2 Cow Ghee (Bilona)",
+            rows: [
+              {
+                reply_id: "ghee_250",
+                title: "250ml — ₹599",
+                description: "Hand-churned pure desi Bilona ghee",
+                next_node_key: "collect_address",
+              },
+              {
+                reply_id: "ghee_500",
+                title: "500ml — ₹1099",
+                description: "Hand-churned pure desi Bilona ghee",
+                next_node_key: "collect_address",
+              },
+              {
+                reply_id: "ghee_1000",
+                title: "1000ml — ₹1999",
+                description: "Hand-churned pure desi Bilona ghee",
+                next_node_key: "collect_address",
+              },
+            ],
+          },
+        ],
+      } as SendListNodeConfig,
+    },
+    // ---- Checkout: address → QR → payment screenshot → thanks → handoff ----
+    {
+      node_key: "collect_address",
+      node_type: "collect_input",
+      config: {
+        prompt_text:
+          "Great choice! 🎉\n\nPlease reply with your *full delivery address* (with pincode) and your *name* so we can ship your order.",
+        var_key: "address",
+        next_node_key: "pay_intro",
+      } as CollectInputNodeConfig,
+    },
+    {
+      node_key: "pay_intro",
       node_type: "send_message",
       config: {
         text:
-          "Thank you for showing interest 🙌\n\nOur team will reach out to you shortly to confirm sizes, delivery address, and payment. Meanwhile, feel free to ask any questions right here.",
-        next_node_key: "interest_handoff",
+          "Thank you! 🙏\n\nTo confirm your order, scan the QR below and pay the amount shown for your item. Works with any UPI app — GPay / PhonePe / Paytm. 👇",
+        next_node_key: "qr",
       } as SendMessageNodeConfig,
     },
     {
-      node_key: "interest_handoff",
+      node_key: "qr",
+      node_type: "send_media",
+      config: {
+        media_type: "image",
+        // ⬆️ Upload your UPI / payment QR image to this step in the
+        // builder before activating the flow.
+        media_url: "",
+        caption: "Scan to pay via any UPI app 👆",
+        filename: "",
+        next_node_key: "await_payment",
+      } as SendMediaNodeConfig,
+    },
+    {
+      node_key: "await_payment",
+      node_type: "await_image",
+      config: {
+        prompt_text:
+          "Once you've paid, please send a *screenshot of the payment* here so we can confirm it. 📸",
+        var_key: "payment_proof",
+        next_node_key: "order_thanks",
+      } as AwaitImageNodeConfig,
+    },
+    {
+      node_key: "order_thanks",
+      node_type: "send_message",
+      config: {
+        text:
+          "🙏 Thank you for your order and for choosing Vanamati!\n\nWe've received your payment screenshot. Our team will *verify the payment* and *dispatch your order shortly* — you'll get all the updates right here. 🍯",
+        next_node_key: "order_handoff",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "order_handoff",
       node_type: "handoff",
       config: {
-        note: "Product interest from menu — check the last interactive reply for the exact SKU the customer picked.",
+        note: "💰 NEW ORDER — verify payment & dispatch. The customer's product choice, delivery address, and payment screenshot are all in this conversation above (address + screenshot captured to the order).",
       } as HandoffNodeConfig,
     },
+    // ---- Help menu: Track order / FAQs / Human ----
+    {
+      node_key: "help_menu",
+      node_type: "send_buttons",
+      config: {
+        text: "How can we help?",
+        buttons: [
+          { reply_id: "track", title: "📦 Track order", next_node_key: "track_order" },
+          { reply_id: "faqs", title: "❓ FAQs", next_node_key: "faq_menu" },
+          {
+            reply_id: "human",
+            title: "💬 Talk to human",
+            next_node_key: "human_handoff",
+          },
+        ],
+      } as SendButtonsNodeConfig,
+    },
+    {
+      node_key: "track_order",
+      node_type: "collect_input",
+      config: {
+        prompt_text:
+          "Sure! Please send your *order number* (from your confirmation), e.g. 1024.",
+        var_key: "order_number",
+        next_node_key: "do_lookup",
+      } as CollectInputNodeConfig,
+    },
+    {
+      node_key: "do_lookup",
+      node_type: "order_lookup",
+      config: {
+        order_var: "order_number",
+        next_node_key: "after_answer",
+      } as OrderLookupNodeConfig,
+    },
+    // ---- FAQ branch ----
     {
       node_key: "faq_menu",
       node_type: "send_list",
       config: {
-        text: "Pick a question below.",
+        text: "Pick a question:",
         button_label: "See questions",
         sections: [
           {
@@ -433,32 +588,32 @@ const VANAMATI_STORE: FlowTemplate = {
               {
                 reply_id: "faq_purity",
                 title: "Are your products pure?",
-                description: "Every batch tested & certified",
+                description: "Lab-tested, no additives",
                 next_node_key: "faq_purity_ans",
               },
               {
                 reply_id: "faq_shipping",
                 title: "Do you ship pan-India?",
-                description: "Same-day dispatch on weekdays",
+                description: "Dispatch & delivery timelines",
                 next_node_key: "faq_shipping_ans",
               },
               {
                 reply_id: "faq_shelf",
                 title: "How long do they last?",
-                description: "Honey 24 mo · Ghee 6 mo",
+                description: "Honey & ghee shelf life",
                 next_node_key: "faq_shelf_ans",
               },
               {
-                reply_id: "faq_cod",
-                title: "Is COD available?",
-                description: "Yes, on orders above ₹500",
-                next_node_key: "faq_cod_ans",
+                reply_id: "faq_pay",
+                title: "Payment & COD?",
+                description: "How to pay for your order",
+                next_node_key: "faq_pay_ans",
               },
               {
                 reply_id: "faq_human",
                 title: "Talk to a human",
                 description: "Chat with our team",
-                next_node_key: "faq_human_handoff",
+                next_node_key: "human_handoff",
               },
             ],
           },
@@ -470,8 +625,8 @@ const VANAMATI_STORE: FlowTemplate = {
       node_type: "send_message",
       config: {
         text:
-          "✅ Every batch is lab-tested for purity and traceable back to the farm. No sugar, syrup, or additives — ever. Raw, unpasteurised, and single-origin.",
-        next_node_key: "faq_after_answer",
+          "✅ Every batch is lab-tested for purity and traceable to the farm. No sugar, syrup, or additives — ever. Raw, unpasteurised and single-origin.",
+        next_node_key: "after_answer",
       } as SendMessageNodeConfig,
     },
     {
@@ -479,8 +634,8 @@ const VANAMATI_STORE: FlowTemplate = {
       node_type: "send_message",
       config: {
         text:
-          "🚚 We ship across India via COD or prepaid. Orders placed before 4 pm dispatch the same day (Mon–Sat). Delivery in 3–7 business days depending on your PIN code.",
-        next_node_key: "faq_after_answer",
+          "🚚 We ship across India. Orders placed before 4pm dispatch the same day (Mon–Sat). Delivery in 3–7 business days depending on your PIN code.",
+        next_node_key: "after_answer",
       } as SendMessageNodeConfig,
     },
     {
@@ -488,130 +643,51 @@ const VANAMATI_STORE: FlowTemplate = {
       node_type: "send_message",
       config: {
         text:
-          "🧴 Raw honey stays good for 24 months if kept in a cool, dry place — natural crystallisation is normal and safe. A2 ghee stays fresh for 6 months at room temperature; refrigerate to extend it further.",
-        next_node_key: "faq_after_answer",
+          "🧴 Raw honey stays good for 24 months in a cool, dry place — natural crystallisation is normal & safe. A2 ghee stays fresh 6 months at room temperature; refrigerate to extend.",
+        next_node_key: "after_answer",
       } as SendMessageNodeConfig,
     },
     {
-      node_key: "faq_cod_ans",
+      node_key: "faq_pay_ans",
       node_type: "send_message",
       config: {
         text:
-          "💳 Cash on Delivery is available on all orders above ₹500. Prepaid orders (UPI / card / netbanking) get a 5% discount at checkout.",
-        next_node_key: "faq_after_answer",
+          "💳 Pay by UPI (GPay / PhonePe / Paytm) via the QR we share when you order. Cash on Delivery is available on orders above ₹500.",
+        next_node_key: "after_answer",
       } as SendMessageNodeConfig,
     },
+    // ---- Post-answer navigation ----
     {
-      node_key: "faq_after_answer",
+      node_key: "after_answer",
       node_type: "send_buttons",
       config: {
-        text: "Anything else I can help with?",
+        text: "Anything else?",
         buttons: [
           {
-            reply_id: "back_to_menu",
-            title: "See products",
-            next_node_key: "menu",
+            reply_id: "back_menu",
+            title: "🛍️ See products",
+            next_node_key: "category_menu",
           },
           {
-            reply_id: "more_faqs",
-            title: "More questions",
+            reply_id: "more_faq",
+            title: "❓ More questions",
             next_node_key: "faq_menu",
           },
-          {
-            reply_id: "done",
-            title: "That's all",
-            next_node_key: "end",
-          },
+          { reply_id: "done", title: "✅ That's all", next_node_key: "end" },
         ],
       } as SendButtonsNodeConfig,
     },
     {
-      node_key: "faq_human_handoff",
+      node_key: "human_handoff",
       node_type: "handoff",
       config: {
-        note: "Customer asked to talk to a human from the FAQ menu.",
+        note: "Customer asked to talk to a human from the Vanamati menu.",
       } as HandoffNodeConfig,
     },
     {
       node_key: "end",
       node_type: "end",
       config: {},
-    },
-  ],
-};
-
-// ============================================================
-// 5. Vanamati — order & pay: QR → payment screenshot → thank-you → alert
-// ============================================================
-const VANAMATI_ORDER_PAY: FlowTemplate = {
-  slug: "vanamati_order_pay",
-  name: "Vanamati — order & pay",
-  description:
-    "Customer types 'order' → the bot shows your payment QR, waits for the payment screenshot, thanks them, and drops the chat into the pending queue for your team to verify and dispatch. Upload your UPI/payment QR to the 'Send media' step before activating.",
-  icon: "MessageSquare",
-  trigger_type: "keyword",
-  trigger_config: {
-    keywords: ["order", "buy", "place order", "pay"],
-    match_type: "contains",
-  },
-  entry_node_id: "start",
-  nodes: [
-    {
-      node_key: "start",
-      node_type: "start",
-      config: { next_node_key: "pay_intro" },
-    },
-    {
-      node_key: "pay_intro",
-      node_type: "send_message",
-      config: {
-        text:
-          "🛒 Wonderful! To place your order, scan the QR below to pay. Once you've paid, send a screenshot of the payment here and we'll get your order dispatched. 🍯",
-        next_node_key: "qr",
-      } as SendMessageNodeConfig,
-    },
-    {
-      node_key: "qr",
-      node_type: "send_media",
-      config: {
-        media_type: "image",
-        // ⬆️ Upload your payment / UPI QR image to this step in the builder
-        // before activating the flow.
-        media_url: "",
-        caption: "Scan to pay via UPI or your preferred app.",
-        filename: "",
-        next_node_key: "await_screenshot",
-      } as SendMediaNodeConfig,
-    },
-    {
-      node_key: "await_screenshot",
-      node_type: "await_image",
-      config: {
-        prompt_text:
-          "📸 After paying, please send a screenshot of the completed payment here.",
-        var_key: "payment_proof",
-        next_node_key: "thank_you",
-      } as AwaitImageNodeConfig,
-    },
-    {
-      node_key: "thank_you",
-      node_type: "send_message",
-      config: {
-        text:
-          "🙏 Thank you! We've received your payment screenshot. Your order will be dispatched shortly — our team will confirm the delivery details with you right here.",
-        next_node_key: "notify_team",
-      } as SendMessageNodeConfig,
-    },
-    {
-      node_key: "notify_team",
-      node_type: "handoff",
-      config: {
-        // Ends the run and moves the conversation to the pending queue so
-        // your team sees it (the incoming screenshot also raises the
-        // normal new-message notification). Optionally set an assignee in
-        // the builder to route it to a specific person.
-        note: "💰 Payment screenshot received (saved to the chat as vars.payment_proof). Verify the payment and dispatch the order.",
-      } as HandoffNodeConfig,
     },
   ],
 };
@@ -625,7 +701,6 @@ const TEMPLATES: Record<string, FlowTemplate> = {
   faq_bot: FAQ_BOT,
   lead_capture: LEAD_CAPTURE,
   vanamati_store: VANAMATI_STORE,
-  vanamati_order_pay: VANAMATI_ORDER_PAY,
 };
 
 export function getFlowTemplate(slug: string): FlowTemplate | null {
