@@ -94,6 +94,18 @@ interface WhatsAppWebhookEntry {
         status: string
         timestamp: string
         recipient_id: string
+        // Populated ONLY for status='failed'. Meta always sends at least
+        // one entry when the send failed at the platform — first entry
+        // is the primary error. Persisted on messages.error_* by
+        // handleStatusUpdate so the inbox can surface it without a
+        // Meta round-trip. Migration 028.
+        errors?: Array<{
+          code: number
+          title?: string
+          message?: string
+          error_data?: { details?: string }
+          href?: string
+        }>
       }>
     }
     field: string
@@ -370,15 +382,41 @@ async function handleStatusUpdate(status: {
   status: string
   timestamp: string
   recipient_id: string
+  errors?: Array<{
+    code: number
+    title?: string
+    message?: string
+    error_data?: { details?: string }
+  }>
 }) {
   // 1) Mirror onto messages (legacy behavior) — Meta's status values
   //    already match the CHECK constraint on messages.status. No
   //    `.select()`: message_id is NOT unique (migration 009 — Meta ids
   //    repeat across numbers), so this updates 0..N rows and must not
   //    assume a single row.
+  //
+  //    On status='failed', persist the primary Meta error alongside
+  //    status so the inbox can render "Failed: (#132000) template
+  //    param mismatch" without hunting through Meta's console (migration
+  //    028). Prefer error_data.details for the message body — it's
+  //    usually the most specific string Meta returns (e.g. "template
+  //    'welcome_code' expects 1 parameter but 0 were provided") vs
+  //    the shorter .title. Log the raw error alongside the DB write so
+  //    Railway logs still have it for triage.
+  const update: Record<string, unknown> = { status: status.status }
+  if (status.status === 'failed' && status.errors && status.errors.length > 0) {
+    const err = status.errors[0]
+    update.error_code = err.code != null ? String(err.code) : null
+    update.error_title = err.title ?? null
+    update.error_message = err.error_data?.details ?? err.message ?? err.title ?? null
+    console.error(
+      `[webhook] message ${status.id} failed (#${err.code}): ${update.error_message}`,
+    )
+  }
+
   const { error: msgErr } = await supabaseAdmin()
     .from('messages')
-    .update({ status: status.status })
+    .update(update)
     .eq('message_id', status.id)
 
   if (msgErr) {

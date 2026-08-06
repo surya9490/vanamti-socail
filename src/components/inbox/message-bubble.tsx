@@ -328,6 +328,25 @@ export function MessageBubble({
           </span>
           {isAgent && <StatusIcon status={message.status} />}
         </div>
+        {/*
+          Failed-send diagnostic. Meta returns an error code + human
+          message when a send fails at the platform (template param
+          count mismatch, closed 24h window, opted-out recipient, …).
+          Migration 028 persists these on messages.error_*; showing
+          them here saves the agent from bouncing to Meta's console
+          just to know WHY a bubble is red-X'd.
+        */}
+        {isAgent && message.status === "failed" && message.error_message && (
+          <div
+            className="mt-1 max-w-65 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1 text-[10px] leading-snug text-red-300"
+            title={message.error_title ?? undefined}
+          >
+            <span className="font-semibold">
+              Failed{message.error_code ? ` (#${message.error_code})` : ""}:
+            </span>{" "}
+            {message.error_message}
+          </div>
+        )}
       </div>
       {reactions && reactions.length > 0 && onToggleReaction && (
         <MessageReactions

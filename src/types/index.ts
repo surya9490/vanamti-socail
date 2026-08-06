@@ -232,6 +232,22 @@ export interface Message {
   created_at: string;
   reply_to_message_id?: string;
   /**
+   * Meta failure details, populated by the webhook when Meta reports
+   * status='failed' for this message (migration 028). Null for every
+   * non-failed message. Rendered in the message bubble so agents can
+   * see WHY a send failed without opening Meta's console.
+   *
+   * error_code   — Meta error code (e.g. '132000' — TEXT so we can hold
+   *                non-numeric platform codes in future).
+   * error_title  — short human title.
+   * error_message — the most specific string Meta returned; prefers
+   *                 errors[0].error_data.details, falls back to
+   *                 .message, then .title.
+   */
+  error_code?: string;
+  error_title?: string;
+  error_message?: string;
+  /**
    * Only set when `content_type === 'interactive'` — the stable id of
    * the button or list row the customer tapped. The Flows engine uses
    * this to route the next node; the inbox bubble uses it as a styling
