@@ -110,6 +110,45 @@ export async function POST(request: Request) {
       interactivePayload,
     });
 
+    // Auto-resolve template language against the account's approved
+    // templates. Meta rejects with 132001 ("Template name does not
+    // exist in the translation") if the caller sends a language that
+    // wasn't approved for that template name — e.g. sending `en_US`
+    // when Meta only approved `en`. Callers routinely get this wrong
+    // because language codes vary per template and Shopify apps /
+    // integrations don't always know the exact approved variant.
+    //
+    // Resolution rules:
+    //   1. Prefer the caller-provided language IF it matches an
+    //      approved row for this template name. Preserves explicit
+    //      choice when caller does know what they're doing.
+    //   2. Otherwise pick any approved language for the template name
+    //      (usually there's only one). Auto-corrects the common typo.
+    //   3. If no approved row exists locally, pass through the
+    //      caller's value unchanged and let Meta reject with the
+    //      original 132001 — better than silently succeeding.
+    const providedLanguage =
+      typeof template?.language === 'string' ? template.language : null;
+    let effectiveTemplateLanguage = providedLanguage;
+    const templateName = typeof template?.name === 'string' ? template.name : null;
+    if (templateName) {
+      const { data: approvedRows } = await ctx.supabase
+        .from('message_templates')
+        .select('language')
+        .eq('account_id', ctx.accountId)
+        .eq('name', templateName)
+        .eq('status', 'APPROVED');
+      const approvedLangs = (approvedRows ?? [])
+        .map((r) => (r as { language?: string }).language)
+        .filter((l): l is string => typeof l === 'string' && l.length > 0);
+      if (approvedLangs.length > 0) {
+        effectiveTemplateLanguage =
+          providedLanguage && approvedLangs.includes(providedLanguage)
+            ? providedLanguage
+            : approvedLangs[0];
+      }
+    }
+
     // Find-or-create the conversation for this phone, then send. Both
     // steps share `SendMessageError`, so one catch maps the whole
     // pipeline to the envelope.
@@ -129,9 +168,8 @@ export async function POST(request: Request) {
         contentText: typeof body.text === 'string' ? body.text : null,
         mediaUrl: typeof body.media_url === 'string' ? body.media_url : null,
         filename: typeof body.filename === 'string' ? body.filename : null,
-        templateName: typeof template?.name === 'string' ? template.name : null,
-        templateLanguage:
-          typeof template?.language === 'string' ? template.language : null,
+        templateName,
+        templateLanguage: effectiveTemplateLanguage,
         templateParams,
         templateMessageParams,
         interactivePayload,
