@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { orderLookupTool } from './order-lookup'
+import { productLookupTool } from './product-lookup'
 
 // ============================================================
 // AI tool registry — the allow-list of actions the assistant may take
@@ -53,6 +54,7 @@ export interface AiTool {
 
 const REGISTRY: Record<string, AiTool> = {
   [orderLookupTool.name]: orderLookupTool,
+  [productLookupTool.name]: productLookupTool,
 }
 
 /** Every registered tool — used by the settings UI to render toggles. */

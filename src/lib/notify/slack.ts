@@ -13,7 +13,7 @@
 //     stop the handoff itself from persisting. All errors are logged
 //     and swallowed.
 //
-//   * Silent no-op when SLACK_TEAM_WEBHOOK_URL is unset. Deployments
+//   * Silent no-op when SLACK_WHATSAPP_ALERT_TEAM_WEBHOOK_URL is unset. Deployments
 //     that don't want Slack notifications just leave the env var
 //     empty — no code branches to toggle, no per-account setting to
 //     manage. If we grow to N accounts each wanting their own
@@ -32,11 +32,11 @@ const SLACK_TIMEOUT_MS = 3000
 
 /**
  * POST a plain-text (mrkdwn) message to the configured team Slack
- * webhook. Silent no-op if `SLACK_TEAM_WEBHOOK_URL` isn't set.
+ * webhook. Silent no-op if `SLACK_WHATSAPP_ALERT_TEAM_WEBHOOK_URL` isn't set.
  * Always resolves — errors are logged, never thrown.
  */
 export async function postSlackNotification(text: string): Promise<void> {
-  const webhookUrl = process.env.SLACK_TEAM_WEBHOOK_URL
+  const webhookUrl = process.env.SLACK_WHATSAPP_ALERT_TEAM_WEBHOOK_URL
   if (!webhookUrl) return
 
   const controller = new AbortController()
