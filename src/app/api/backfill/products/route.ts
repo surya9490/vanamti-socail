@@ -1,68 +1,52 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-import { verifyVanamatiWebhookSignature } from '@/lib/products/webhook-auth'
+import { requireApiKey } from '@/lib/auth/api-context'
+import { toApiErrorResponse } from '@/lib/api/v1/respond'
 import { upsertProductsBulk } from '@/lib/products/upsert'
 import type { ProductBackfillPayload } from '@/lib/products/types'
 
 // ============================================================
 // POST /api/backfill/products
 //
-// Cold-start / periodic reconciliation endpoint. The Vanamati
-// Shopify app pushes the full product catalogue in batches on:
+// Cold-start / periodic reconciliation. The Vanamati Shopify app
+// pushes the full product catalogue in batches on:
 //   * first install (before any webhooks have fired)
 //   * a nightly diff-sync (catches events dropped from webhook failures)
 //   * an operator-triggered "rebuild cache" action
 //
-// Body:
-//   { account_id: '<WACRM account uuid>',
-//     products: [ {shop_product_id, title, ...}, ... ] }
+// Auth: same as the streaming webhook — Authorization: Bearer
+// <WACRM_API_KEY> with 'products:write' scope. Target account is the
+// key's account.
 //
-// Auth: same HMAC scheme as the streaming webhook (reuses
-// VANAMATI_WEBHOOK_SECRET).
+// Body:
+//   { products: [ {shop_product_id, title, ...}, ... ] }
 //
 // Batch size is the sender's call — we upsert whatever arrives in a
-// single Postgres statement. If the batch is too big for the
-// platform's request-body cap, the sender chunks and calls this
-// endpoint multiple times.
+// single Postgres statement. If the batch exceeds the platform's
+// request-body cap, the sender chunks and calls this endpoint
+// multiple times.
 // ============================================================
 
-// Product batches can be large — allow the whole request body up to
-// Vercel's cap (4.5MB by default) and give the handler headroom.
+// Backfill batches can be large — Vercel clamps to the plan ceiling.
 export const maxDuration = 60
 
-let _adminClient: ReturnType<typeof createClient> | null = null
-function supabaseAdmin(): ReturnType<typeof createClient> {
-  if (!_adminClient) {
-    _adminClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    )
-  }
-  return _adminClient
-}
-
 export async function POST(request: Request): Promise<Response> {
-  const rawBody = await request.text()
-  const signature = request.headers.get('x-vanamati-signature')
-
-  if (!verifyVanamatiWebhookSignature(rawBody, signature)) {
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+  let ctx
+  try {
+    ctx = await requireApiKey(request, 'products:write')
+  } catch (err) {
+    return toApiErrorResponse(err)
   }
 
   let payload: ProductBackfillPayload
   try {
-    payload = JSON.parse(rawBody) as ProductBackfillPayload
+    payload = (await request.json()) as ProductBackfillPayload
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  if (
-    !payload ||
-    typeof payload.account_id !== 'string' ||
-    !Array.isArray(payload.products)
-  ) {
+  if (!payload || !Array.isArray(payload.products)) {
     return NextResponse.json(
-      { error: 'account_id and products[] are required' },
+      { error: 'products[] is required' },
       { status: 400 },
     )
   }
@@ -75,9 +59,8 @@ export async function POST(request: Request): Promise<Response> {
   )
   const dropped = payload.products.length - clean.length
 
-  const db = supabaseAdmin()
   try {
-    await upsertProductsBulk(db, payload.account_id, clean)
+    await upsertProductsBulk(ctx.supabase, ctx.accountId, clean)
   } catch (err) {
     console.error('[vanamati backfill] bulk upsert failed:', err)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
