@@ -39,7 +39,14 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          # Bumped from 20 → 22 (current LTS). Node 20 ships npm 10.x,
+          # which reads lockfiles slightly differently from npm 11.x
+          # that most contributors now have locally. After the last
+          # upstream merge, `npm ci` on Node 20 EUSAGE'd on the merged
+          # package-lock.json even though it worked fine locally on
+          # npm 11. Matching CI to a Node version whose bundled npm
+          # is close to what devs run eliminates that drift.
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
