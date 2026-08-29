@@ -36,6 +36,21 @@ vi.mock('./admin-client', () => ({
         }
         return chain
       }
+      if (table === 'messages') {
+        // .select().eq().eq().gt().limit() → recent AI-generated
+        // messages for the cooldown check. Default: none, so the
+        // cooldown never trips for existing test cases (they don't
+        // simulate rapid-fire inbounds). Tests that want to assert
+        // the cooldown path can override `h.state.recentAiMessages`.
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          gt: () => chain,
+          limit: () =>
+            Promise.resolve({ data: h.state.recentAiMessages, error: null }),
+        }
+        return chain
+      }
       // conversations
       return {
         select: () => ({
@@ -90,6 +105,7 @@ beforeEach(() => {
     ai_reply_count: 0,
   }
   h.state.autoResponders = []
+  h.state.recentAiMessages = []
   h.state.claim = true
   h.state.updatePayload = null
   h.state.rpcCalls = []
@@ -177,6 +193,18 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
       ai_reply_count: 3,
     }
     await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('skips when the per-conversation cooldown is active', async () => {
+    // Simulate a recent AI reply within the cooldown window. The
+    // exact created_at doesn't matter here — the code just checks
+    // whether the mocked query returned any rows.
+    h.state.recentAiMessages = [
+      { id: 'msg-recent', created_at: new Date().toISOString() },
+    ]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 

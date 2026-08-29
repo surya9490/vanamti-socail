@@ -80,6 +80,42 @@ export async function dispatchInboundToAiReply(
     // below (this read can race a concurrent inbound).
     if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) return
 
+    // Per-conversation cooldown: if we ai-replied to this conversation
+    // within the last AI_REPLY_COOLDOWN_SECONDS, skip.
+    //
+    // Why: a customer sending "hi... hi... hi..." in the space of 5
+    // seconds should trigger ONE reply, not three. The per-conversation
+    // cap alone doesn't help — it counts total lifetime replies, not
+    // burst rate. Without a cooldown the assistant reads three inbounds,
+    // fires three near-identical replies, and the customer feels
+    // spammed. With a cooldown, the first inbound triggers a reply; the
+    // next two are absorbed and the reply the model eventually sends
+    // (30s+ later, or when the customer says something substantially
+    // new) has fuller context.
+    //
+    // 30s is picked empirically: short enough that a real question
+    // gets a fresh reply almost immediately after the previous one
+    // lands, long enough to catch typical rapid-typing bursts.
+    // Hardcoded for now — promote to a per-account config field only
+    // if tuning becomes a real need.
+    const AI_REPLY_COOLDOWN_SECONDS = 30
+    const cooldownCutoff = new Date(
+      Date.now() - AI_REPLY_COOLDOWN_SECONDS * 1000,
+    ).toISOString()
+    const { data: recentAi } = await db
+      .from('messages')
+      .select('id, created_at')
+      .eq('conversation_id', conversationId)
+      .eq('ai_generated', true)
+      .gt('created_at', cooldownCutoff)
+      .limit(1)
+    if (recentAi && recentAi.length > 0) {
+      console.log(
+        `[ai auto-reply] cooldown active on conversation ${conversationId} (last AI reply < ${AI_REPLY_COOLDOWN_SECONDS}s ago) — skipping.`,
+      )
+      return
+    }
+
     const messages = await buildConversationContext(db, conversationId)
     if (messages.length === 0) return
 
