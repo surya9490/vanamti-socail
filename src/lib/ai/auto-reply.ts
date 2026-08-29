@@ -119,6 +119,50 @@ export async function dispatchInboundToAiReply(
     const messages = await buildConversationContext(db, conversationId)
     if (messages.length === 0) return
 
+    // Silence-gap detection for re-engagement greeting.
+    //
+    // If the customer's previous inbound was >SILENCE_GAP_DAYS ago
+    // (or there IS no previous inbound — this is their first message
+    // in the conversation), treat this as a re-engagement moment: the
+    // system prompt will instruct the model to greet + surface 1–3
+    // products with prices from the KB.
+    //
+    // Why in-conversation gap and not cross-conversation: we want to
+    // greet on "customer went quiet then came back", regardless of
+    // whether prior conversations exist. A cold-open of a new
+    // conversation is also re-engagement (they're returning to us).
+    //
+    // 3 days is picked as "long enough that a new greeting doesn't
+    // feel weird in a normally-active thread". A same-day follow-up
+    // should feel like a continuation, not a fresh hello. Hardcoded
+    // for now — promote to config if a tuning need shows up.
+    const SILENCE_GAP_DAYS = 3
+    let silenceGapDays: number | null = null
+    const { data: recentInbounds } = await db
+      .from('messages')
+      .select('created_at')
+      .eq('conversation_id', conversationId)
+      .eq('sender_type', 'customer')
+      .order('created_at', { ascending: false })
+      .limit(2)
+    if (recentInbounds && recentInbounds.length >= 1) {
+      if (recentInbounds.length === 1) {
+        // Only one customer message ever → this IS the first message.
+        // Flagged as "gap of 0" is confusing; the prompt clause treats
+        // any non-null value as "re-engagement".
+        silenceGapDays = 0
+      } else {
+        const [current, previous] = recentInbounds
+        const gapMs =
+          new Date(current.created_at).getTime() -
+          new Date(previous.created_at).getTime()
+        const gapDays = gapMs / (1000 * 60 * 60 * 24)
+        if (gapDays > SILENCE_GAP_DAYS) {
+          silenceGapDays = Math.floor(gapDays)
+        }
+      }
+    }
+
     // Account-wide throttle on the shared BYO key. The per-conversation
     // cap bounds one thread; this bounds a burst across many threads (a
     // marketing blast landing 200 replies at once) so we never run the
@@ -148,6 +192,7 @@ export async function dispatchInboundToAiReply(
       mode: 'auto_reply',
       knowledge,
       defaultLanguage: config.defaultLanguage,
+      silenceGapDays,
     })
 
     // Function-calling tools the account has switched on (e.g. order

@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
     recentAiMessages: [] as { id: string; created_at: string }[],
+    recentInbounds: [] as { created_at: string }[],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
     rpcCalls: [] as { name: string; args: unknown }[],
@@ -38,17 +39,37 @@ vi.mock('./admin-client', () => ({
         return chain
       }
       if (table === 'messages') {
-        // .select().eq().eq().gt().limit() → recent AI-generated
-        // messages for the cooldown check. Default: none, so the
-        // cooldown never trips for existing test cases (they don't
-        // simulate rapid-fire inbounds). Tests that want to assert
-        // the cooldown path can override `h.state.recentAiMessages`.
-        const chain = {
+        // Two distinct queries hit `messages`:
+        //  1. Cooldown check: .select().eq().eq().gt().limit() — resolves
+        //     via `.limit()`, returns `h.state.recentAiMessages`.
+        //  2. Silence-gap detection: .select().eq().eq().order().limit()
+        //     — resolves via `.limit()` (which is chained AFTER .order()),
+        //     returns `h.state.recentInbounds`.
+        // We disambiguate on `.order()` — its presence switches the
+        // terminal `.limit()` to the silence-gap payload.
+        const chain: {
+          select: () => typeof chain
+          eq: () => typeof chain
+          gt: () => typeof chain
+          order: () => typeof chain
+          limit: () => Promise<{ data: unknown; error: null }>
+          _isOrdered: boolean
+        } = {
+          _isOrdered: false,
           select: () => chain,
           eq: () => chain,
           gt: () => chain,
+          order: () => {
+            chain._isOrdered = true
+            return chain
+          },
           limit: () =>
-            Promise.resolve({ data: h.state.recentAiMessages, error: null }),
+            Promise.resolve({
+              data: chain._isOrdered
+                ? h.state.recentInbounds
+                : h.state.recentAiMessages,
+              error: null,
+            }),
         }
         return chain
       }
@@ -107,6 +128,15 @@ beforeEach(() => {
   }
   h.state.autoResponders = []
   h.state.recentAiMessages = []
+  // Default: two customer inbounds 1 second apart → no silence gap.
+  // Keeps the "greeting clause" out of the system prompt for the
+  // existing tests, so they can keep asserting the base prompt.
+  const now = new Date()
+  const oneSecondAgo = new Date(now.getTime() - 1000)
+  h.state.recentInbounds = [
+    { created_at: now.toISOString() },
+    { created_at: oneSecondAgo.toISOString() },
+  ]
   h.state.claim = true
   h.state.updatePayload = null
   h.state.rpcCalls = []

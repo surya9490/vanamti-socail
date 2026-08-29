@@ -61,8 +61,17 @@ export function buildSystemPrompt(args: {
    * default to English — the pre-existing implicit behaviour.
    */
   defaultLanguage?: string | null
+  /**
+   * Days the customer was silent before the current inbound. `null` =
+   * this is a normal in-flight reply (no special greeting). `0` = the
+   * customer's very first message in the conversation. `>=1` = they
+   * went quiet for that many days and just came back. Auto-reply
+   * mode uses this to decide whether to open with a greeting +
+   * product mentions.
+   */
+  silenceGapDays?: number | null
 }): string {
-  const { userPrompt, mode, knowledge, defaultLanguage } = args
+  const { userPrompt, mode, knowledge, defaultLanguage, silenceGapDays } = args
   // Non-empty tag → explicit fallback; else "English". Kept as a
   // sentence rather than an enum so the model handles any BCP-47 tag
   // an admin sets without a code change (e.g., 'en-IN' → Indian
@@ -99,9 +108,27 @@ export function buildSystemPrompt(args: {
     // the NEXT customer with the same question gets a real answer
     // instead of another handoff. That's the "learn from human via
     // knowledge base, not by humans taking over live threads" model.
+    // Greeting clause is added ONLY on first contact or after a
+    // silence gap — not on every reply. Keeps steady-state token
+    // spend flat and avoids the model greeting on every follow-up.
+    const isFirstContact = silenceGapDays === 0
+    const isReturningAfterSilence =
+      typeof silenceGapDays === 'number' && silenceGapDays >= 1
+    let greetingClause = ''
+    if (isFirstContact || isReturningAfterSilence) {
+      const opener = isFirstContact
+        ? `This is the customer's first message to us in this conversation.`
+        : `The customer was silent for about ${silenceGapDays} day(s) before this message — treat it as re-engagement.`
+      greetingClause =
+        `${opener} Open with ONE brief, professional greeting line, then answer their actual message. ` +
+        `If — and only if — their opener is generic (a plain hi/hello/namaste, a "what do you sell" style question, or an emoji), you may add 1–2 relevant products WITH prices drawn from the knowledge base at the end of the same message. ` +
+        `Never send a catalog. Never mention products the KB doesn't contain. If the KB has no product info, just greet and ask what they're looking for — do not make up products. ` +
+        `On any specific question (a product name, an order number, a policy), answer that question first; the greeting is a single leading line, and products are only mentioned if directly relevant.\n\n`
+    }
+
     parts.push(
       `You are replying automatically with no human in the loop. Default to trying to help — use the knowledge base, ask ONE clarifying question if the customer's message is ambiguous, and give concrete answers when the knowledge base supports them.\n\n` +
-        `First-exchange greeting: if the conversation shows only the customer's opening message and no prior assistant reply, open your response with a brief warm greeting AND include 1–3 relevant products with prices drawn from the knowledge base (if the KB has them). Keep it a single professional message — never a wall of catalog. If the customer's opener is already a specific question, answer that first and mention products only if directly relevant.\n\n` +
+        greetingClause +
         `Escalate to a human by replying with exactly ${HANDOFF_SENTINEL} (and nothing else) ONLY in these cases:\n` +
         `  1. The customer explicitly asks for a human, agent, person, or team member.\n` +
         `  2. The topic is refunds, billing disputes, complaints about a specific person, legal claims, medical/safety issues, or account access problems.\n` +
