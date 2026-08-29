@@ -1736,7 +1736,14 @@
       "addDoc": "Add document",
       "reindex": "Reindex",
       "reindexTooltip": "Re-embed all documents (e.g. after adding an embeddings key)",
-      "loading": "Loading…"
+      "loading": "Loading…",
+      "sourceWebsite": "Imported from website",
+      "importDoc": "Import from website",
+      "importUrlLabel": "Website URL",
+      "importUrlRequired": "Please enter a URL to import.",
+      "importHint": "We'll crawl up to 30 pages on the same domain and add them as knowledge. Only same-origin links are followed.",
+      "importButton": "Import",
+      "importFailed": "Import failed."
     }
   }
 }
