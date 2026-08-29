@@ -15,6 +15,23 @@ const eslintConfig = defineConfig([
     // Vendored minified opus-recorder encoder worker (served statically).
     "public/opus/**",
   ]),
+  {
+    // Two React-Compiler-era rules that upstream's own commits
+    // consistently violate — probably because their CI has been
+    // stuck on "action_required" for a while, so nobody sees the
+    // errors before merging. We can't fix upstream's files
+    // downstream without triggering merge conflicts on every
+    // subsequent pull, so we downgrade the pair to warnings.
+    //
+    // Both stay actionable in the console output (yellow warns
+    // are still visible in CI logs) but stop blocking deploys.
+    // Revisit periodically: once upstream re-enables their CI
+    // and cleans these up, promote back to `error`.
+    rules: {
+      "react-hooks/set-state-in-effect": "warn",
+      "react-hooks/preserve-manual-memoization": "warn",
+    },
+  },
 ]);
 
 export default eslintConfig;
