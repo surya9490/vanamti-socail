@@ -30,6 +30,10 @@ const eslintConfig = defineConfig([
     rules: {
       "react-hooks/set-state-in-effect": "warn",
       "react-hooks/preserve-manual-memoization": "warn",
+      // Also downgraded — fires when a function is `use`d in an effect
+      // above its declaration site (function hoisting). Upstream has
+      // this pattern in contact-form.tsx and other places.
+      "react-hooks/immutability": "warn",
     },
   },
 ]);
