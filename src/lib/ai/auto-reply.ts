@@ -10,6 +10,10 @@ import { latestUserMessage } from './query'
 import { getEnabledTools, type ToolContext } from './tools/registry'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
+import {
+  postSlackNotification,
+  buildHandoffSlackMessage,
+} from '@/lib/notify/slack'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -261,6 +265,47 @@ export async function dispatchInboundToAiReply(
         update.assigned_agent_id = config.handoffAgentId
       }
       await db.from('conversations').update(update).eq('id', conversationId)
+
+      // Slack notification (fire-and-forget). Silent no-op when
+      // SLACK_TEAM_WEBHOOK_URL is unset. Wrapped in its own async
+      // IIFE so the contact lookup + POST never delay the return —
+      // the DB update above is what "closes" the handoff; the
+      // notification is best-effort telemetry to the team channel.
+      void (async () => {
+        try {
+          const { data: contact } = await db
+            .from('contacts')
+            .select('name, phone')
+            .eq('id', contactId)
+            .maybeSingle()
+          const lastCustomer = [...messages]
+            .reverse()
+            .find((m) => m.role === 'user')
+          const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || '').replace(
+            /\/+$/,
+            '',
+          )
+          const inboxUrl = baseUrl
+            ? `${baseUrl}/inbox?c=${conversationId}`
+            : null
+          await postSlackNotification(
+            buildHandoffSlackMessage({
+              contactName:
+                (contact as { name?: string | null } | null)?.name ?? null,
+              contactPhone:
+                (contact as { phone?: string | null } | null)?.phone ?? null,
+              lastCustomerMessage:
+                typeof lastCustomer?.content === 'string'
+                  ? lastCustomer.content
+                  : null,
+              handoffSummary: summary,
+              inboxUrl,
+            }),
+          )
+        } catch (err) {
+          console.warn('[ai auto-reply] slack handoff notify failed:', err)
+        }
+      })()
       return
     }
 
