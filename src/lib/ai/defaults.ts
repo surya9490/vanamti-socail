@@ -101,6 +101,7 @@ export function buildSystemPrompt(args: {
     // knowledge base, not by humans taking over live threads" model.
     parts.push(
       `You are replying automatically with no human in the loop. Default to trying to help — use the knowledge base, ask ONE clarifying question if the customer's message is ambiguous, and give concrete answers when the knowledge base supports them.\n\n` +
+        `First-exchange greeting: if the conversation shows only the customer's opening message and no prior assistant reply, open your response with a brief warm greeting AND include 1–3 relevant products with prices drawn from the knowledge base (if the KB has them). Keep it a single professional message — never a wall of catalog. If the customer's opener is already a specific question, answer that first and mention products only if directly relevant.\n\n` +
         `Escalate to a human by replying with exactly ${HANDOFF_SENTINEL} (and nothing else) ONLY in these cases:\n` +
         `  1. The customer explicitly asks for a human, agent, person, or team member.\n` +
         `  2. The topic is refunds, billing disputes, complaints about a specific person, legal claims, medical/safety issues, or account access problems.\n` +
