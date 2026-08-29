@@ -266,46 +266,52 @@ export async function dispatchInboundToAiReply(
       }
       await db.from('conversations').update(update).eq('id', conversationId)
 
-      // Slack notification (fire-and-forget). Silent no-op when
-      // SLACK_TEAM_WEBHOOK_URL is unset. Wrapped in its own async
-      // IIFE so the contact lookup + POST never delay the return —
-      // the DB update above is what "closes" the handoff; the
-      // notification is best-effort telemetry to the team channel.
-      void (async () => {
-        try {
-          const { data: contact } = await db
-            .from('contacts')
-            .select('name, phone')
-            .eq('id', contactId)
-            .maybeSingle()
-          const lastCustomer = [...messages]
-            .reverse()
-            .find((m) => m.role === 'user')
-          const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || '').replace(
-            /\/+$/,
-            '',
-          )
-          const inboxUrl = baseUrl
-            ? `${baseUrl}/inbox?c=${conversationId}`
-            : null
-          await postSlackNotification(
-            buildHandoffSlackMessage({
-              contactName:
-                (contact as { name?: string | null } | null)?.name ?? null,
-              contactPhone:
-                (contact as { phone?: string | null } | null)?.phone ?? null,
-              lastCustomerMessage:
-                typeof lastCustomer?.content === 'string'
-                  ? lastCustomer.content
-                  : null,
-              handoffSummary: summary,
-              inboxUrl,
-            }),
-          )
-        } catch (err) {
-          console.warn('[ai auto-reply] slack handoff notify failed:', err)
-        }
-      })()
+      // Slack notification — awaited, NOT fire-and-forget.
+      //
+      // We're already inside the webhook's after() block, so the
+      // serverless container is being kept alive until this function
+      // returns. Fire-and-forget (`void (async () => ...)()`) lets
+      // the outer function return before the fetch finishes, at
+      // which point the container can be frozen or killed on
+      // Vercel/Railway and the POST is silently dropped.
+      //
+      // postSlackNotification enforces a 3s timeout and swallows all
+      // errors, so awaiting adds at most ~500ms in the happy path
+      // and can never fail the handoff. Silent no-op if
+      // SLACK_WHATSAPP_ALERT_TEAM_WEBHOOK_URL is unset.
+      try {
+        const { data: contact } = await db
+          .from('contacts')
+          .select('name, phone')
+          .eq('id', contactId)
+          .maybeSingle()
+        const lastCustomer = [...messages]
+          .reverse()
+          .find((m) => m.role === 'user')
+        const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || '').replace(
+          /\/+$/,
+          '',
+        )
+        const inboxUrl = baseUrl
+          ? `${baseUrl}/inbox?c=${conversationId}`
+          : null
+        await postSlackNotification(
+          buildHandoffSlackMessage({
+            contactName:
+              (contact as { name?: string | null } | null)?.name ?? null,
+            contactPhone:
+              (contact as { phone?: string | null } | null)?.phone ?? null,
+            lastCustomerMessage:
+              typeof lastCustomer?.content === 'string'
+                ? lastCustomer.content
+                : null,
+            handoffSummary: summary,
+            inboxUrl,
+          }),
+        )
+      } catch (err) {
+        console.warn('[ai auto-reply] slack handoff notify failed:', err)
+      }
       return
     }
 
