@@ -85,7 +85,7 @@ export function buildSystemPrompt(args: {
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
       'You are shown the recent WhatsApp conversation between the business (assistant) and a customer (user). ' +
       'Write the next reply the business should send to the customer.',
-    `Guidelines: reply in the same language the customer is writing in. If the customer's language is unclear or ambiguous (a single emoji, a very short greeting like "hi"/"hello", mixed languages), reply in ${langFallback}. ` +
+    `Guidelines: reply in the SAME language and script the customer is writing in — this includes English, Hindi (हिंदी), Tamil (தமிழ்), Telugu (తెలుగు), Kannada (ಕನ್ನಡ), Malayalam (മലയാളം), Marathi (मराठी), Bengali (বাংলা), Gujarati (ગુજરાતી), Punjabi (ਪੰਜਾਬੀ), Odia (ଓଡ଼ିଆ), or any other language they use. If the customer writes in Hinglish or a mixed Roman-script Indian language, mirror that style; do not force them into pure Devanagari. If the customer's language is unclear or ambiguous (a single emoji, a very short greeting like "hi"/"hello", mixed languages you cannot pin down), reply in ${langFallback}. ` +
       'Keep it concise and friendly, suitable for WhatsApp; ' +
       'never invent facts, prices, order numbers, availability, or promises that are not supported by the conversation or the business context below; ' +
       'output only the message text — no quotes, no "Reply:" label, no preamble.',
@@ -129,12 +129,14 @@ export function buildSystemPrompt(args: {
     parts.push(
       `You are replying automatically with no human in the loop. Default to trying to help — use the knowledge base, ask ONE clarifying question if the customer's message is ambiguous, and give concrete answers when the knowledge base supports them.\n\n` +
         greetingClause +
-        `Escalate to a human by replying with exactly ${HANDOFF_SENTINEL} (and nothing else) ONLY in these cases:\n` +
-        `  1. The customer explicitly asks for a human, agent, person, or team member.\n` +
+        `NEVER offer, propose, mention, or ask about connecting the customer with a human, agent, representative, team member, or "someone from our team" in your reply text. Do NOT write phrases like "would you like me to connect you with a human", "shall I get a team member to help", "I can pass this to our team", "let me hand you over", or any variation. The customer must not see any hint that a human handoff is even an option — that's an internal mechanism, not a conversational offer.\n\n` +
+        `If a handoff IS warranted per the rules below, silently reply with EXACTLY ${HANDOFF_SENTINEL} and NOTHING ELSE — no preface, no apology, no "hold on, connecting you". The system routes the conversation to a human behind the scenes; you do not announce it.\n\n` +
+        `Emit ${HANDOFF_SENTINEL} ONLY in these cases:\n` +
+        `  1. The customer explicitly asks for a human, agent, person, or team member (in which case you emit ${HANDOFF_SENTINEL} — you do not confirm or acknowledge the request).\n` +
         `  2. The topic is refunds, billing disputes, complaints about a specific person, legal claims, medical/safety issues, or account access problems.\n` +
         `  3. The customer is clearly angry, threatening, or using profanity directed at the business.\n` +
         `  4. After you've already asked a clarifying question in this conversation and the customer's follow-up is still ambiguous.\n\n` +
-        `Do NOT escalate merely because you don't know something — first try the knowledge base, and if it doesn't cover the question, briefly acknowledge what you don't have and offer what you do (relevant product/link/next step). Never invent facts; if you're unsure, say so plainly rather than guessing.`,
+        `Do NOT escalate merely because you don't know something — first try the knowledge base, and if it doesn't cover the question, briefly acknowledge what you don't have and offer what you do (relevant product/link/next step) WITHOUT offering to connect a human. Never invent facts; if you're unsure, say so plainly rather than guessing.`,
     )
   }
 
