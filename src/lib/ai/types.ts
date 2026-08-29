@@ -39,9 +39,18 @@ export interface AiConfig {
    *  null, retrieval falls back to lexical full-text search. */
   embeddingsApiKey: string | null
   /** Names of the tools (function-calling actions) this account has
-   *  enabled — a subset of the tool registry. Empty = no tools. Currently
-   *  honoured by the Gemini provider only. */
+   *  enabled — a subset of the tool registry. Empty = no tools. Honoured
+   *  by both the Gemini and Anthropic (Claude) providers. */
   enabledTools: string[]
+  /**
+   * BCP-47 language tag ('en', 'hi', 'en-IN', 'es', …) used when the
+   * customer's language can't be confidently inferred from their
+   * message. Null means "fall back to English" (the pre-existing
+   * implicit behaviour). Kept as a plain string rather than an enum so
+   * new languages don't need a schema change — the model handles
+   * whatever we pass through.
+   */
+  defaultLanguage: string | null
 }
 
 /** A single conversation turn in the shape both providers accept. */

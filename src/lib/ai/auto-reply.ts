@@ -111,6 +111,7 @@ export async function dispatchInboundToAiReply(
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
+      defaultLanguage: config.defaultLanguage,
     })
 
     // Function-calling tools the account has switched on (e.g. order

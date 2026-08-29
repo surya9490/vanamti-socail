@@ -88,6 +88,9 @@ export function AiConfig() {
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(false);
   const [maxPerConversation, setMaxPerConversation] = useState(3);
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
+  // BCP-47 tag used when the customer's language is ambiguous. Empty
+  // string = null on the wire (fall back to English at prompt time).
+  const [defaultLanguage, setDefaultLanguage] = useState('');
   // Empty string = leave unassigned (shared queue).
   const [handoffAgentId, setHandoffAgentId] = useState('');
   const [members, setMembers] = useState<AccountMember[]>([]);
@@ -116,6 +119,7 @@ export function AiConfig() {
         setAutoReplyEnabled(data.auto_reply_enabled);
         setMaxPerConversation(data.auto_reply_max_per_conversation ?? 3);
         setEnabledTools(Array.isArray(data.enabled_tools) ? data.enabled_tools : []);
+        setDefaultLanguage(typeof data.default_language === 'string' ? data.default_language : '');
         setHandoffAgentId(data.handoff_agent_id ?? '');
         setHasStoredKey(Boolean(data.has_key));
         setApiKey(data.has_key ? MASKED_KEY : '');
@@ -167,6 +171,9 @@ export function AiConfig() {
     auto_reply_enabled: autoReplyEnabled,
     auto_reply_max_per_conversation: maxPerConversation,
     enabled_tools: enabledTools,
+    // Send trimmed value so trailing whitespace never survives to
+    // the DB; empty string tells the server to clear the column.
+    default_language: defaultLanguage.trim(),
     handoff_agent_id: handoffAgentId || null,
   });
 
@@ -471,6 +478,34 @@ export function AiConfig() {
                 }
                 disabled={disabled || !autoReplyEnabled}
                 className="w-20"
+              />
+            </div>
+
+            {/*
+              Default language for ambiguous customer messages. The
+              model still mirrors the customer's language when it can
+              tell — this only kicks in for a lone emoji, a bare "hi",
+              mixed languages, etc. Leaving it blank → falls back to
+              English (the pre-existing implicit behaviour).
+            */}
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label htmlFor="ai-lang">Default reply language</Label>
+                <p className="text-xs text-muted-foreground">
+                  BCP-47 tag (e.g. <code>en</code>, <code>hi</code>,{' '}
+                  <code>en-IN</code>). Used only when the customer's
+                  language is ambiguous. Blank = English.
+                </p>
+              </div>
+              <Input
+                id="ai-lang"
+                type="text"
+                maxLength={16}
+                placeholder="en"
+                value={defaultLanguage}
+                onChange={(e) => setDefaultLanguage(e.target.value)}
+                disabled={disabled}
+                className="w-24"
               />
             </div>
 

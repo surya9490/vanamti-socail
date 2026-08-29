@@ -13,10 +13,11 @@ interface AiConfigRow {
   handoff_agent_id: string | null
   embeddings_api_key: string | null
   enabled_tools: string[] | null
+  default_language: string | null
 }
 
 const CONFIG_COLUMNS =
-  'provider, model, api_key, system_prompt, is_active, auto_reply_enabled, auto_reply_max_per_conversation, handoff_agent_id, embeddings_api_key, enabled_tools'
+  'provider, model, api_key, system_prompt, is_active, auto_reply_enabled, auto_reply_max_per_conversation, handoff_agent_id, embeddings_api_key, enabled_tools, default_language'
 
 /**
  * Load and decrypt the account's AI config for *use* (draft or
@@ -81,6 +82,7 @@ export async function loadAiConfig(
     handoffAgentId: row.handoff_agent_id,
     embeddingsApiKey,
     enabledTools: row.enabled_tools ?? [],
+    defaultLanguage: row.default_language ?? null,
   }
 }
 

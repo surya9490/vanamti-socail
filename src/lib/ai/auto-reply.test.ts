@@ -78,6 +78,7 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
     handoffAgentId: null,
     embeddingsApiKey: null,
     enabledTools: [],
+    defaultLanguage: null,
     ...overrides,
   }
 }

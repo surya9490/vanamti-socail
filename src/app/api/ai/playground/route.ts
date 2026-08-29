@@ -82,6 +82,7 @@ export async function POST(request: Request) {
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
+      defaultLanguage: config.defaultLanguage,
     })
 
     const { text, handoff } = await generateReply({ config, systemPrompt, messages })

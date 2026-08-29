@@ -31,7 +31,7 @@ export async function GET() {
       // `api_key` is selected only to derive `has_key` — it is stripped
       // out below and never returned to the client.
       .select(
-        'provider, model, system_prompt, is_active, auto_reply_enabled, auto_reply_max_per_conversation, handoff_agent_id, api_key, embeddings_api_key, enabled_tools',
+        'provider, model, system_prompt, is_active, auto_reply_enabled, auto_reply_max_per_conversation, handoff_agent_id, api_key, embeddings_api_key, enabled_tools, default_language',
       )
       .eq('account_id', accountId)
       .maybeSingle()
@@ -125,6 +125,26 @@ export async function POST(request: Request) {
         )
       : []
 
+    // Default language for ambiguous customer messages (BCP-47 tag —
+    // 'en', 'hi', 'en-IN'). Absent → left unchanged; empty string /
+    // null → cleared (falls back to English at prompt-build time).
+    // Length bound matches the DB CHECK in migration 047.
+    const languageProvided = 'default_language' in body
+    let defaultLanguage: string | null = null
+    if (languageProvided) {
+      const raw =
+        typeof body.default_language === 'string'
+          ? body.default_language.trim()
+          : ''
+      if (raw.length > 0) {
+        if (raw.length < 2 || raw.length > 16) {
+          return bad('default_language must be a 2–16 character tag like "en" or "en-IN"')
+        }
+        defaultLanguage = raw
+      }
+      // else: raw === '' → cleared to null below
+    }
+
     const rawKey = typeof body.api_key === 'string' ? body.api_key.trim() : ''
 
     // Embeddings key (optional, for semantic KB search): a non-empty
@@ -179,6 +199,11 @@ export async function POST(request: Request) {
           handoffAgentId: null,
           embeddingsApiKey: null,
           enabledTools: [],
+          // Validator only exercises reachability of the API key; the
+          // language default doesn't affect that path. Pass null so the
+          // AiConfig type is satisfied without changing validate's
+          // behaviour.
+          defaultLanguage: null,
         })
       } catch (err) {
         if (err instanceof AiError) {
@@ -222,6 +247,7 @@ export async function POST(request: Request) {
     // so a partial save (e.g. flipping a toggle) doesn't wipe it.
     if (handoffProvided) shared.handoff_agent_id = handoffAgentId
     if (toolsProvided) shared.enabled_tools = enabledTools
+    if (languageProvided) shared.default_language = defaultLanguage
     if (rawEmbeddingsKey) {
       shared.embeddings_api_key = encrypt(rawEmbeddingsKey)
     } else if (clearEmbeddingsKey) {
