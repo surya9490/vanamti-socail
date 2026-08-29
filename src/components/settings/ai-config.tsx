@@ -571,7 +571,18 @@ export function AiConfig() {
                 />
               </div>
             ))}
-            {provider !== 'gemini' && enabledTools.length > 0 && (
+            {/*
+              Warn only when the selected provider is a text-only one
+              (OpenAI). Gemini has always executed tools; Anthropic
+              gained the tool loop in the Phase-1 change to
+              src/lib/ai/providers/anthropic.ts. Keeping the old
+              `!== 'gemini'` guard falsely alarms Claude users who
+              enabled a tool that will in fact fire. The key name
+              (`toolsGeminiOnly`) is kept for now to avoid rewriting
+              every locale; the copy inside en.json is what actually
+              tells the truth.
+            */}
+            {provider === 'openai' && enabledTools.length > 0 && (
               <p className="text-xs text-amber-600 dark:text-amber-500">
                 {t('toolsGeminiOnly')}
               </p>

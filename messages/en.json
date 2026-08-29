@@ -1709,7 +1709,10 @@
       "saveSuccess": "AI assistant saved.",
       "saveFailed": "Failed to save.",
       "removeSuccess": "AI configuration removed.",
-      "removeFailed": "Failed to remove."
+      "removeFailed": "Failed to remove.",
+      "toolsTitle": "Tools",
+      "toolsDesc": "Actions the assistant can take mid-conversation. When enabled, the model may call the tool and use the result in its reply.",
+      "toolsGeminiOnly": "Tools work with Gemini and Claude (Anthropic). OpenAI is text-only — enabled tools will be ignored on that provider."
     },
     "aiKnowledge": {
       "loadFailed": "Failed to load knowledge base",
