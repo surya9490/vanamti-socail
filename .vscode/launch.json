@@ -1,0 +1,130 @@
+{
+  // VS Code / Cursor debugger configs for this Next.js + Vitest project.
+  //
+  // Pick a config from the Run and Debug panel (⇧⌘D on macOS,
+  // Ctrl+Shift+D on Win/Linux) → dropdown at the top → ▶.
+  //
+  // WHICH ONE TO USE:
+  //   • "Next.js: full stack"  — 99% of the time. Boots the dev
+  //     server AND Chrome with the debugger attached to both, so
+  //     breakpoints work in server routes AND in client components.
+  //   • "Next.js: server only" — attaches to /api/**, app/**/page.tsx
+  //     server render, middleware, RSC. Cheaper than full stack;
+  //     use when you're only chasing a server-side bug.
+  //   • "Next.js: client only (Chrome)" — attaches Chrome only.
+  //     Assumes the dev server is already running (npm run dev).
+  //   • "Vitest: current file"  — runs tests in the file you have
+  //     open, with breakpoints. Fastest debug loop for lib code.
+  //   • "Vitest: all"           — full suite with the debugger.
+  //     Use sparingly — slower than plain `npm test`.
+  //
+  // NEXT.JS DEBUGGING NOTES:
+  //   • Set breakpoints in *.ts/tsx before starting. Cold-hit
+  //     breakpoints on the first request should work; if a
+  //     breakpoint appears "unbound", save the file to re-map
+  //     source maps then trigger the code path again.
+  //   • The dev server runs Turbopack (per next.config.ts). Source
+  //     maps are enabled by default in dev.
+  //   • Server-only code (route handlers, `use server` actions,
+  //     server components) hits the *node* attach. Client code
+  //     (`"use client"` components, browser event handlers) hits
+  //     the *chrome* attach.
+  //   • Env vars (SUPABASE_URL etc.) are loaded from .env.local by
+  //     Next automatically; no extra `envFile` needed.
+  {
+    "version": "0.2.0",
+    "compounds": [
+      {
+        "name": "Next.js: full stack (server + Chrome)",
+        "configurations": [
+          "Next.js: server only",
+          "Next.js: client only (Chrome)"
+        ],
+        "stopAll": true
+      }
+    ],
+    "configurations": [
+      {
+        // Node inspector attach to `next dev`. Uses `node-terminal`
+        // so the dev-server output streams into the integrated
+        // terminal like a normal `npm run dev`, but with the
+        // debugger already wired via NODE_OPTIONS.
+        "name": "Next.js: server only",
+        "type": "node-terminal",
+        "request": "launch",
+        "command": "npm run dev",
+        "env": {
+          "NODE_OPTIONS": "--inspect"
+        },
+        "cwd": "${workspaceFolder}"
+      },
+      {
+        // Launches a dedicated Chrome window that connects to the
+        // running dev server. Requires the server to be up (from
+        // the "server only" config, from `npm run dev` in a
+        // terminal, or from the "full stack" compound).
+        //
+        // `userDataDir: true` gives it a fresh Chrome profile per
+        // session — no interference from your everyday extensions.
+        "name": "Next.js: client only (Chrome)",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:3000",
+        "webRoot": "${workspaceFolder}",
+        "sourceMapPathOverrides": {
+          "webpack://_N_E/*": "${webRoot}/*",
+          "turbopack://*": "${webRoot}/*"
+        },
+        "userDataDir": true
+      },
+      {
+        // Single-file test debugger. Open a *.test.ts, put
+        // breakpoints, hit ▶. Runs ONLY that file — much faster
+        // than the whole suite.
+        //
+        // Uses --run so vitest exits after one pass; --no-file-parallelism
+        // simplifies breakpoint hits by avoiding worker forks.
+        "name": "Vitest: current file",
+        "type": "node",
+        "request": "launch",
+        "runtimeExecutable": "npx",
+        "runtimeArgs": [
+          "vitest",
+          "run",
+          "--no-file-parallelism",
+          "${relativeFile}"
+        ],
+        "console": "integratedTerminal",
+        "cwd": "${workspaceFolder}",
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+      },
+      {
+        // Full-suite debugger. Slower to start; the whole test
+        // graph loads before any breakpoint fires.
+        "name": "Vitest: all",
+        "type": "node",
+        "request": "launch",
+        "runtimeExecutable": "npx",
+        "runtimeArgs": [
+          "vitest",
+          "run",
+          "--no-file-parallelism"
+        ],
+        "console": "integratedTerminal",
+        "cwd": "${workspaceFolder}",
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+      },
+      {
+        // Attach to a Node process that's ALREADY running with
+        // --inspect (e.g. you ran `NODE_OPTIONS=--inspect npm run
+        // dev` in a terminal, or you're debugging a one-off script
+        // via `node --inspect-brk _script.mjs`). Default port 9229.
+        "name": "Node: attach",
+        "type": "node",
+        "request": "attach",
+        "port": 9229,
+        "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+      }
+    ]
+  }
+}

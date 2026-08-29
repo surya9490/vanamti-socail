@@ -180,6 +180,8 @@ export async function POST(request: Request) {
       }
     );
 
+    console.log(`[api/v1/messages] sent message ${result.messageId} to ${to} (conversation ${resolved.conversationId})`);
+
     return ok(
       {
         message_id: result.messageId,

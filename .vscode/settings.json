@@ -1,0 +1,57 @@
+{
+  // Editor defaults for this project. Committed to git so anyone
+  // opening the repo gets the same setup — the linter, formatter,
+  // and TypeScript version match what CI runs.
+
+  // Use the workspace's copy of TypeScript, not VS Code's bundled
+  // one. next.config.ts and modern syntax break on older TS
+  // versions; pinning avoids mysterious red squiggles that don't
+  // reproduce for anyone else.
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+
+  // Prettier via the extension, matching what `npm run format`
+  // does from the CLI. On save = one source of truth for style.
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": true,
+
+  // ESLint fixes on save. Same rules as `npm run lint`. Turns
+  // "warns that will fail CI" into "warns that never left your
+  // laptop".
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "eslint.validate": [
+    "javascript",
+    "javascriptreact",
+    "typescript",
+    "typescriptreact"
+  ],
+
+  // Tailwind IntelliSense picks up the tw-merge / cva helpers used
+  // throughout the UI so class strings inside these helpers get
+  // completions + hover previews.
+  "tailwindCSS.experimental.classRegex": [
+    ["cva\\(([^)]*)\\)", "[\"'`]([^\"'`]*).*?[\"'`]"],
+    ["cn\\(([^)]*)\\)", "[\"'`]([^\"'`]*).*?[\"'`]"],
+    ["twMerge\\(([^)]*)\\)", "[\"'`]([^\"'`]*).*?[\"'`]"]
+  ],
+
+  // Never open .next / node_modules in file search or watchers —
+  // massive perf drain on this size of project.
+  "files.watcherExclude": {
+    "**/.next/**": true,
+    "**/node_modules/**": true,
+    "**/.turbo/**": true
+  },
+  "search.exclude": {
+    "**/.next": true,
+    "**/node_modules": true,
+    "**/.turbo": true,
+    "**/package-lock.json": true
+  },
+
+  // Prevent VS Code from suggesting Windows line endings after the
+  // first CRLF file sneaks in.
+  "files.eol": "\n"
+}
