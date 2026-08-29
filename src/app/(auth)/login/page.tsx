@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
@@ -15,8 +15,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, UsersRound } from "lucide-react";
 
+// `useSearchParams` opts the component out of static prerendering
+// unless it sits under a Suspense boundary. We split the form into
+// a child component so the outer page can prerender the chrome
+// (background, card frame) while the form hydrates with the query
+// string on the client.
 export default function LoginPage() {
   return (
     <Suspense fallback={null}>
@@ -26,14 +31,17 @@ export default function LoginPage() {
 }
 
 function LoginPageInner() {
+  const searchParams = useSearchParams();
+  // Forwarded from `/join/<token>` when the visitor already has an
+  // account. After a successful sign-in we send them to the join
+  // page to accept rather than to /dashboard.
+  const inviteToken = searchParams.get("invite");
   const t = useTranslations("LoginPage");
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const inviteToken = searchParams.get("invite");
   const supabase = createClient();
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -52,25 +60,38 @@ function LoginPageInner() {
       return;
     }
 
-    if (inviteToken) {
-      router.push(`/join/${encodeURIComponent(inviteToken)}`);
-    } else {
-      router.push("/dashboard");
-    }
+    // Full-page navigation (not router.push) so the browser issues a
+    // fresh top-level request that carries the just-written Supabase
+    // auth cookies to the middleware gating /dashboard. A soft
+    // client-side navigation can reach the protected route before the
+    // server observes the new session, so the middleware bounces it
+    // back to /login — which looks like the page "just refreshing"
+    // instead of signing in (issue #365). Mirrors the deliberate full
+    // reload the invite-accept flow already uses in join/[token].
+    const destination = inviteToken
+      ? `/join/${encodeURIComponent(inviteToken)}`
+      : "/dashboard";
+    window.location.href = destination;
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4">
-      <Card className="w-full max-w-md border-slate-800 bg-slate-900">
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+      <Card className="w-full max-w-md border-border bg-card">
         <CardHeader className="items-center text-center">
           <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-            <MessageSquare className="h-6 w-6 text-primary" />
+            {inviteToken ? (
+              <UsersRound className="h-6 w-6 text-primary" />
+            ) : (
+              <MessageSquare className="h-6 w-6 text-primary" />
+            )}
           </div>
           <CardTitle className="text-xl text-foreground">
-            {t('titleWelcome')}
+            {inviteToken ? t('titleAccept') : t('titleWelcome')}
           </CardTitle>
           <CardDescription className="text-muted-foreground">
-            {t('descWelcome')}
+            {inviteToken
+              ? t('descAccept')
+              : t('descWelcome')}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -92,7 +113,7 @@ function LoginPageInner() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="border-slate-700 bg-slate-800 text-white placeholder:text-slate-500 focus-visible:border-primary focus-visible:ring-primary/20"
+                className="border-border bg-muted text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/20"
               />
             </div>
 
@@ -115,7 +136,7 @@ function LoginPageInner() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="border-slate-700 bg-slate-800 text-white placeholder:text-slate-500 focus-visible:border-primary focus-visible:ring-primary/20"
+                className="border-border bg-muted text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/20"
               />
             </div>
 
@@ -128,18 +149,30 @@ function LoginPageInner() {
             </Button>
           </form>
 
+          {/*
+            Deployment is invite-only. Upstream renders a
+            "Don't have an account? Create account" link that goes
+            to /signup for open-signup deployments; we override with
+            a plain "ask admin for invite" line so /signup is only
+            reached via a valid ?invite=<token> link (our /signup
+            gate refuses to render its form otherwise — see
+            src/app/(auth)/signup/page.tsx).
+            When the user arrives with an invite token in the URL
+            (from /join/<token>), let the existing upstream link
+            through so redemption still works.
+          */}
           {inviteToken ? (
-            <p className="mt-6 text-center text-sm text-slate-400">
-              New here?{" "}
+            <p className="mt-6 text-center text-sm text-muted-foreground">
+              {t('noAccount')}{" "}
               <Link
                 href={`/signup?invite=${encodeURIComponent(inviteToken)}`}
-                className="text-primary hover:text-primary/80 font-medium"
+                className="text-primary hover:text-primary/80"
               >
-                Create an account &amp; join
+                {t('createAccount')}
               </Link>
             </p>
           ) : (
-            <p className="mt-6 text-center text-xs text-slate-500">
+            <p className="mt-6 text-center text-xs text-muted-foreground">
               New here? Ask your admin to send you an invite.
             </p>
           )}

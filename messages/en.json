@@ -60,6 +60,13 @@
   "ModeToggle": {
     "switchMode": "Switch to {mode} mode"
   },
+  "AccountAccess": {
+    "unlinkedTitle": "This user is not linked to an account",
+    "unlinkedBody": "Nothing you change will be saved while this is unresolved — the database rejects every write from a user with no account or role. If you were invited to a team, ask the owner to re-send the invitation. On a self-hosted install, check that the account-bootstrap migration ran for this user.",
+    "errorTitle": "Could not load your permissions",
+    "errorBody": "Your account role did not load, so every action is treated as read-only and changes will not save. Check your connection and try again.",
+    "retry": "Retry"
+  },
   "Dashboard": {
     "page": {
       "title": "Dashboard",
@@ -216,7 +223,25 @@
       "interactiveReply": "[Interactive reply]",
       "unsupported": "[Unsupported message type]",
       "aiBadge": "AI",
-      "aiBadgeTitle": "Sent automatically by the AI assistant"
+      "aiBadgeTitle": "Sent automatically by the AI assistant",
+      "download": "Download",
+      "downloadFailed": "Couldn't download the attachment",
+      "viewImage": "View image",
+      "expandVideo": "Expand video",
+      "imageAlt": "Shared image"
+    },
+    "mediaViewer": {
+      "counter": "{index} of {total}",
+      "previous": "Previous",
+      "next": "Next",
+      "zoomIn": "Zoom to full size",
+      "zoomOut": "Fit to screen",
+      "openOriginal": "Open original",
+      "download": "Download",
+      "downloadFailed": "Couldn't download the attachment",
+      "failed": "This attachment is no longer available",
+      "imageAlt": "Shared image",
+      "you": "You"
     },
     "actions": {
       "reply": "Reply",
@@ -359,9 +384,9 @@
         "custom": "Custom Fields",
         "deals": "Deals",
         "tags": "Tags",
-        "noTags": "No tags",
-        "noDeals": "No deals",
-        "addNotePlaceholder": "Add a note..."
+      "noTags": "No tags",
+      "noDeals": "No deals",
+      "addNotePlaceholder": "Add a note..."
       },
       "actions": {
         "edit": "Edit",
@@ -371,6 +396,7 @@
       "contactInfo": "Contact Information",
       "unnamed": "Unknown",
       "contactDetailsDesc": "Contact details",
+      "name": "Name",
       "phone": "Phone",
       "email": "Email",
       "company": "Company",
@@ -655,7 +681,16 @@
         "failed": "Failed"
       },
       "toastFailedDelete": "Failed to delete: {error}",
-      "toastDeleted": "Broadcast deleted"
+      "toastDeleted": "Broadcast deleted",
+      "resumeTitle": "Some recipients need another attempt",
+      "resumeStalledTitle": "This campaign stopped part-way",
+      "resumeHint": "{count} recipients failed. Retrying sends them again from the server.",
+      "resumeStalledHint": "{count} recipients were never sent — the browser tab running this campaign was closed before it finished. Resuming completes it from the server.",
+      "resumePending": "Resume sending ({count})",
+      "retryFailed": "Retry failed ({count})",
+      "toastResumeStarted": "Sending {count} recipients in the background.",
+      "toastResumeStartedCapped": "Sending {count} recipients in the background. {remaining} more will need another run.",
+      "toastResumeFailed": "Could not resume: {error}"
     },
     "new": {
       "title": "New Broadcast",
@@ -726,7 +761,7 @@
         "imageUrl": "Image URL",
         "imageUrlPlaceholder": "https://example.com/image.jpg",
         "variables": "Variables",
-        "varDesc": "Set values for '{{name}}'",
+        "varDesc": "Set values for {{name}}",
         "type": "Type",
         "typeStatic": "Static Value",
         "typeContact": "Contact Field",
@@ -835,7 +870,6 @@
         "wait": "Wait",
         "condition": "Condition (If/Else)",
         "send_webhook": "Send Webhook",
-        "order_lookup": "Order Status Lookup",
         "close_conversation": "Close Conversation"
       },
       "triggers": {
@@ -885,7 +919,6 @@
       "activeAria": "Active",
       "save": "Save",
       "saveDraft": "Save Draft",
-      "delete": "Delete",
       "untitled": "Untitled automation",
       "backToAutomations": "Back to automations",
       "toasts": {
@@ -934,6 +967,7 @@
         "no": "No"
       },
       "addStep": "Add step",
+      "delete": "Delete",
       "config": {
         "messageText": "Message text",
         "placeholderMessageText": "Hi! Thanks for reaching out…",
@@ -946,7 +980,7 @@
         "agentLabel": "Agent",
         "fieldLabel": "Field",
         "valueLabel": "Value",
-        "placeholderValue": "Text or '{{ vars.x }}' / '{{ message.text }}'",
+        "placeholderValue": "Text or {{ vars.x }} / {{ message.text }}",
         "titleLabel": "Title",
         "amountLabel": "Amount",
         "unitLabel": "Unit",
@@ -968,11 +1002,13 @@
         "placeholderTag": "tag id",
         "urlLabel": "URL",
         "headersLabel": "Headers",
-        "placeholderHeaders": "'{\"Authorization\": \"Bearer ...\"}'",
+        "placeholderHeaders": "{\"Authorization\": \"Bearer ...\"}",
         "bodyTemplateLabel": "Body template",
-        "placeholderBody": "'{\"id\": \"{{ contact.id }}\"}'",
+        "placeholderBody": "{\"id\": \"{{ contact.id }}\"}",
         "matchType": "Match type",
         "matchContains": "Contains",
+        "matchWord": "Whole word",
+        "matchWordHint": "Matches the keyword only as a standalone word, so \"k\" no longer fires on \"thanks\". Best for short keywords in space-separated languages; use Contains for languages written without spaces.",
         "matchExact": "Exact",
         "closeConversationHint": "Sets the conversation status to \"closed\". No configuration needed."
       }
@@ -1044,11 +1080,6 @@
       "triggerManualTitle": "Manual only (no auto-trigger)",
       "keywordsLabel": "Keywords (comma-separated)",
       "keywordsPlaceholder": "support, help, hi",
-      "matchTypeLabel": "Match",
-      "matchStartsWith": "Starts with (whole word)",
-      "matchExact": "Exact message",
-      "matchContains": "Contains anywhere",
-      "matchTypeHelp": "For greetings like “hi”, use “Starts with” — it matches “hi” and “hi there” but not “history” or “shipping”. “Contains” over-matches short words.",
       "entryNodeTitle": "Entry node:",
       "entryNodePlaceholder": "Pick the first node…",
       "nodesTitle": "Nodes ({count})",
@@ -1075,8 +1106,6 @@
         "varKeyPlaceholder": "e.g. name, email, company",
         "varKeyHelp": "Interpolate in downstream prompts and handoff notes with",
         "advanceAfterCapture": "After capturing, advance to",
-        "awaitImageHelp": "Optional. The received image's URL is stored under this key (leave blank to just advance on any image).",
-        "advanceAfterImage": "After the image arrives, advance to",
         "internalNote": "Internal note (for the agent picking up)",
         "endNodeHelp": "Terminal node. When the runner reaches this node the run is marked complete. No config needed.",
         "bodyText": "Body text",
@@ -1158,10 +1187,6 @@
           "label": "Collect input",
           "blurb": "Asks a question, saves the reply"
         },
-        "await_image": {
-          "label": "Receive image",
-          "blurb": "Waits for a photo (e.g. payment screenshot)"
-        },
         "condition": {
           "label": "If / else",
           "blurb": "Branches on a rule"
@@ -1173,10 +1198,6 @@
         "handoff": {
           "label": "Handoff to agent",
           "blurb": "Hands the conversation to a human"
-        },
-        "order_lookup": {
-          "label": "Order lookup",
-          "blurb": "Replies with an order's status (Vanamati)"
         },
         "end": {
           "label": "End",
@@ -1370,9 +1391,9 @@
       "headerImage": "Image",
       "headerVideo": "Video",
       "headerDocument": "Document",
-      "headerTextPlaceholder": "Header text (max 60 chars, optional '{{1}}')",
+      "headerTextPlaceholder": "Header text (max 60 chars, optional {{1}})",
       "headerSampleAria": "Sample value for header variable",
-      "headerSamplePlaceholder": "Sample value for '{{1}}' (required for Meta review)",
+      "headerSamplePlaceholder": "Sample value for {{1}} (required for Meta review)",
       
       "uploadImage": "Upload image",
       "uploadHint": "JPEG or PNG, ≤5 MB",
@@ -1383,8 +1404,8 @@
       "documentHint": " Recommended: PDF, ≤100 MB.",
       
       "bodyText": "Body Text",
-      "bodyPlaceholder": "Hello '{{1}}', your order '{{2}}' is confirmed.",
-      "bodyHint": "Use '{{1}}', '{{2}}' for variables (must be contiguous starting at '{{1}}').",
+      "bodyPlaceholder": "Hello {{1}}, your order {{2}} is confirmed.",
+      "bodyHint": "Use {{1}}, {{2}} for variables (must be contiguous starting at {{1}}).",
       "sampleValues": "Sample values (Meta uses these to review your template)",
       "sampleAria": "Sample value for body variable {var}",
       "samplePlaceholder": "Sample for {var}",
@@ -1400,8 +1421,8 @@
       "btnPhone": "Phone",
       "btnCopyCode": "Copy Code",
       "btnLabelPlaceholder": "Button label",
-      "urlPlaceholder": "https://example.com/path or with '{{1}}' suffix",
-      "urlSamplePlaceholder": "Example value for '{{1}}' (required when URL has a variable)",
+      "urlPlaceholder": "https://example.com/path or with {{1}} suffix",
+      "urlSamplePlaceholder": "Example value for {{1}} (required when URL has a variable)",
       "phonePlaceholder": "+15551234567",
       "codePlaceholder": "Example code (e.g. SUMMER20)",
       
@@ -1483,6 +1504,12 @@
       "webhookTitle": "Webhook Configuration",
       "webhookDesc": "Use this URL as your webhook callback in the Meta App Dashboard.",
       "webhookUrl": "Webhook Callback URL",
+      "mediaTitle": "Attachment Storage",
+      "mediaDesc": "Meta deletes received media about 30 days after it arrives. Attachments can be copied to your own storage so they stay viewable.",
+      "mirrorInbound": "Keep inbound attachments",
+      "mirrorInboundDesc": "Save a copy of every photo, video, voice note and document customers send. Uses your Supabase storage; files over 16 MB are skipped.",
+      "mirrorInboundOffWarning": "New attachments will stop being copied and will become unavailable about 30 days after they arrive.",
+      "mirrorInboundSaveFailed": "Could not update the attachment setting.",
       "saving": "Saving...",
       "saveConfig": "Save Configuration",
       "testing": "Testing...",
@@ -1500,14 +1527,14 @@
       "step2_3": "Follow the setup wizard to link your business",
       "step3": "Get API Credentials",
       "step3_1": "Go to WhatsApp > API Setup",
-      "step3_2": "Copy your <strong>Phone Number ID</strong>",
-      "step3_3": "Copy your <strong>WhatsApp Business Account ID</strong>",
-      "step3_4": "Generate a <strong>Permanent Access Token</strong> from Business Settings > System Users",
+      "step3_2": "Copy your <strong class=\"text-foreground\">Phone Number ID</strong>",
+      "step3_3": "Copy your <strong class=\"text-foreground\">WhatsApp Business Account ID</strong>",
+      "step3_4": "Generate a <strong class=\"text-foreground\">Permanent Access Token</strong> from Business Settings > System Users",
       "step4": "Configure Webhooks",
       "step4_1": "Go to WhatsApp > Configuration",
       "step4_2": "Click \"Edit\" on the Webhook section",
-      "step4_3": "Paste the <strong>Webhook Callback URL</strong> from above",
-      "step4_4": "Enter the same <strong>Verify Token</strong> you set here",
+      "step4_3": "Paste the <strong class=\"text-foreground\">Webhook Callback URL</strong> from above",
+      "step4_4": "Enter the same <strong class=\"text-foreground\">Verify Token</strong> you set here",
       "step4_5": "Subscribe to \"messages\" webhook field",
       "metaDocs": "Meta WhatsApp API Documentation"
     },
@@ -1588,12 +1615,7 @@
       "useMode": "Use {mode} mode",
       "active": "Active",
       "accentColor": "Accent color",
-      "useTheme": "Use {name} theme",
-      "notificationSound": "Notification Sound",
-      "notificationSoundDesc": "Choose when to play a chime sound for incoming messages.",
-      "soundOptBackground": "Only when backgrounded",
-      "soundOptAlways": "Always play",
-      "soundOptSilent": "Silent (No sound)"
+      "useTheme": "Use {name} theme"
     },
     "security": {
       "title": "Login & security",
@@ -1651,7 +1673,7 @@
     },
     "aiConfig": {
       "title": "Agent setup",
-      "description": "Bring your own OpenAI, Anthropic, or Google Gemini key. wacrm calls the provider directly with your key — no per-seat AI fees, and your data stays yours. This powers AI-drafted replies in the inbox, the auto-reply bot, and the Playground.",
+      "description": "Bring your own OpenAI or Anthropic key. wacrm calls the provider directly with your key — no per-seat AI fees, and your data stays yours. This powers AI-drafted replies in the inbox, the auto-reply bot, and the Playground.",
       "adminOnlyConfig": "Only admins and owners can change the AI configuration.",
       "loadFailed": "Failed to load AI configuration",
       "providerAndKey": "Provider & key",
@@ -1679,9 +1701,6 @@
       "maxAutoRepliesDesc": "After this many bot replies in one thread, the bot goes quiet.",
       "handoffTo": "Hand off to",
       "handoffToDesc": "When the bot can’t help — or hits the reply cap — it pauses and routes the chat here, with a short note on what happened.",
-      "toolsTitle": "Tools",
-      "toolsDesc": "Give the assistant actions it can take mid-conversation. It only calls a tool when the customer’s question needs it.",
-      "toolsGeminiOnly": "Tools currently run on Google Gemini only — switch the provider to Gemini to use them.",
       "handoffQueue": "Unassigned queue (any agent can pick it up)",
       "remove": "Remove",
       "save": "Save",
@@ -1715,23 +1734,9 @@
       "cancel": "Cancel",
       "saveDoc": "Save document",
       "addDoc": "Add document",
-      "importDoc": "Import from website",
-      "importUrlLabel": "Website URL",
-      "importUrlRequired": "Enter a website URL to import.",
-      "importHint": "Crawls up to 10 pages of the site and adds their text to the knowledge base. Re-importing updates existing pages instead of duplicating them.",
-      "importButton": "Import",
-      "importSuccess": "Imported {imported} new and updated {updated} page(s).",
-      "importFailed": "Import failed.",
-      "sourceWebsite": "Website",
       "reindex": "Reindex",
       "reindexTooltip": "Re-embed all documents (e.g. after adding an embeddings key)",
       "loading": "Loading…"
     }
-  },
-  "roles": {
-    "owner": "Owner",
-    "admin": "Admin",
-    "agent": "Agent",
-    "viewer": "Viewer"
   }
 }
