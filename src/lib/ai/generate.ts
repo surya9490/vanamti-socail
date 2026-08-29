@@ -7,7 +7,7 @@ import {
 } from './types'
 import { HANDOFF_SENTINEL, aiRequestTimeoutMs } from './defaults'
 import { generateOpenAi } from './providers/openai'
-import { generateAnthropic } from './providers/anthropic'
+import { generateAnthropic, generateAnthropicWithTools } from './providers/anthropic'
 import { generateGemini, generateGeminiWithTools } from './providers/gemini'
 import type { AiTool, ToolContext } from './tools/registry'
 
@@ -42,19 +42,25 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
   }
 
   let result: { text: string; usage: AiUsage | null }
-  // Tool (function) calling is Gemini-only for now. When tools are enabled
-  // and we're on Gemini, run the tool loop; every other case is a single
-  // text generation (other providers ignore any tools passed).
-  if (
-    config.provider === 'gemini' &&
-    args.tools &&
-    args.tools.length > 0 &&
-    args.toolContext
-  ) {
+  // Tool (function) calling is supported by Gemini and Anthropic. When
+  // tools are enabled and the provider has a tool-loop adapter, run it;
+  // OpenAI (no adapter yet) falls through to a plain text generation
+  // that ignores any tools passed. Adding OpenAI's function calling is a
+  // future PR — the code path is deliberately identical so slotting in
+  // `generateOpenAiWithTools` is a one-line change here.
+  const hasTools =
+    args.tools !== undefined && args.tools.length > 0 && args.toolContext !== undefined
+  if (hasTools && config.provider === 'gemini') {
     result = await generateGeminiWithTools({
       ...providerArgs,
-      tools: args.tools,
-      toolContext: args.toolContext,
+      tools: args.tools!,
+      toolContext: args.toolContext!,
+    })
+  } else if (hasTools && config.provider === 'anthropic') {
+    result = await generateAnthropicWithTools({
+      ...providerArgs,
+      tools: args.tools!,
+      toolContext: args.toolContext!,
     })
   } else {
     switch (config.provider) {
