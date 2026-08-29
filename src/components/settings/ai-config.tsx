@@ -493,7 +493,7 @@ export function AiConfig() {
                 <Label htmlFor="ai-lang">Default reply language</Label>
                 <p className="text-xs text-muted-foreground">
                   BCP-47 tag (e.g. <code>en</code>, <code>hi</code>,{' '}
-                  <code>en-IN</code>). Used only when the customer's
+                  <code>en-IN</code>). Used only when the customer&apos;s
                   language is ambiguous. Blank = English.
                 </p>
               </div>
