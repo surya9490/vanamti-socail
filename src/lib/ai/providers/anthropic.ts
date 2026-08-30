@@ -18,6 +18,14 @@ const ANTHROPIC_VERSION = '2023-06-01'
  *  tool loops. */
 const MAX_TOOL_ROUNDS = 4
 
+/** Retry policy for 5xx / timeout / network errors. Anthropic's
+ *  Messages API is usually reliable; a single retry with a short
+ *  backoff catches transient blips without doubling the customer's
+ *  wait on a real outage. 4xx (bad request, auth, over-quota) is
+ *  never retried — it'd just fail again and cost another call. */
+const RETRY_ATTEMPTS = 2
+const RETRY_BACKOFF_MS = 500
+
 // ------------------------------------------------------------
 // Content blocks — Anthropic's Messages API sends content as an array of
 // typed blocks (text | tool_use | tool_result), not a plain string.
@@ -103,39 +111,96 @@ function toAnthropicInputSchema(params: ToolParameters): Record<string, unknown>
 /**
  * POST one /v1/messages request. Shared by the plain and tool-calling
  * paths so error handling, timeouts, and version-header stay in one place.
+ * Retries once on 5xx or network/timeout errors — 4xx is treated as
+ * terminal (retrying wouldn't help and wastes the caller's key spend).
  */
 async function postAnthropic(
   apiKey: string,
   body: Record<string, unknown>,
   timeoutMs: number,
 ): Promise<AnthropicResponse> {
-  let res: Response
-  try {
-    res = await fetch(ANTHROPIC_URL, {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': ANTHROPIC_VERSION,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
-    })
-  } catch (err) {
-    throw toNetworkError(err)
+  let lastErr: unknown
+
+  for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt += 1) {
+    let res: Response
+    try {
+      res = await fetch(ANTHROPIC_URL, {
+        method: 'POST',
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': ANTHROPIC_VERSION,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+    } catch (err) {
+      // Network / abort / timeout. These are the "worth retrying"
+      // failure class — provider might be blipping, DNS transient, etc.
+      lastErr = toNetworkError(err)
+      if (attempt < RETRY_ATTEMPTS - 1) {
+        await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS))
+        continue
+      }
+      throw lastErr
+    }
+
+    if (!res.ok) {
+      // Retry 5xx (server error) but NEVER 4xx (bad key, malformed
+      // request, over-quota, rate-limit — those need a code / plan
+      // change, not a retry).
+      if (res.status >= 500 && attempt < RETRY_ATTEMPTS - 1) {
+        lastErr = await providerHttpError('Anthropic', res)
+        await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS))
+        continue
+      }
+      throw await providerHttpError('Anthropic', res)
+    }
+
+    const data = (await res.json().catch(() => null)) as AnthropicResponse | null
+    if (!data) {
+      throw new AiError('Anthropic returned an unreadable response.', {
+        code: 'empty_response',
+      })
+    }
+    return data
   }
 
-  if (!res.ok) {
-    throw await providerHttpError('Anthropic', res)
-  }
+  // Loop exit without return happens only if we exhausted retries on
+  // errors — throw whatever was captured last.
+  throw lastErr ?? new AiError('Anthropic request failed after retries.', {
+    code: 'network_error',
+  })
+}
 
-  const data = (await res.json().catch(() => null)) as AnthropicResponse | null
-  if (!data) {
-    throw new AiError('Anthropic returned an unreadable response.', {
-      code: 'empty_response',
-    })
-  }
-  return data
+/**
+ * Wrap the system prompt in Anthropic's cache_control block. The
+ * system prompt is the same on every reply for a given account
+ * (~3K tokens); marking it ephemeral tells Anthropic to cache it
+ * for 5 min so subsequent requests only pay ~10% of the input cost
+ * on the cached prefix. On a typical sales conversation (5-10 turns
+ * within a session) this saves 30-50% of prompt-side spend.
+ *
+ * Anthropic prompt caching:
+ *   - system as an array of blocks with cache_control on the ones
+ *     to cache
+ *   - eligible prefix must be >=1024 tokens (Sonnet 5) — our system
+ *     prompt is ~3K, comfortably over the floor
+ *   - separately-billable "cache write" on first call, then "cache
+ *     read" (~0.1x cost) on subsequent calls within the 5-min TTL
+ */
+function cachedSystemBlock(systemPrompt: string): Array<{
+  type: 'text'
+  text: string
+  cache_control?: { type: 'ephemeral' }
+}> {
+  return [
+    {
+      type: 'text',
+      text: systemPrompt,
+      cache_control: { type: 'ephemeral' },
+    },
+  ]
 }
 
 /** Extract joined text from an Anthropic response's content blocks. */
@@ -166,7 +231,7 @@ export async function generateAnthropic(args: ProviderArgs): Promise<ProviderRes
     apiKey,
     {
       model,
-      system: systemPrompt,
+      system: cachedSystemBlock(systemPrompt),
       max_tokens: MAX_OUTPUT_TOKENS,
       messages: normalizeForAnthropic(messages),
     },
@@ -215,7 +280,7 @@ export async function generateAnthropicWithTools(
       apiKey,
       {
         model,
-        system: systemPrompt,
+        system: cachedSystemBlock(systemPrompt),
         max_tokens: MAX_OUTPUT_TOKENS,
         tools: anthropicTools,
         messages: conversation,
