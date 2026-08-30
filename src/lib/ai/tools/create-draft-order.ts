@@ -236,7 +236,7 @@ export const createDraftOrderTool: AiTool = {
           (v) => v.id === variantId,
         )
       })
-      product = (found as typeof product) ?? null
+      product = (found ?? null) as typeof product
     }
 
     if (!product) {
