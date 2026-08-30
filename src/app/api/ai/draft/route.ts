@@ -5,6 +5,7 @@ import { loadAiConfig } from '@/lib/ai/config'
 import { buildConversationContext } from '@/lib/ai/context'
 import { retrieveKnowledge } from '@/lib/ai/knowledge'
 import { generateReply } from '@/lib/ai/generate'
+import { extractGrade } from '@/lib/ai/grading'
 import { buildSystemPrompt } from '@/lib/ai/defaults'
 import { latestUserMessage } from '@/lib/ai/query'
 import { logAiUsage } from '@/lib/ai/usage'
@@ -127,7 +128,12 @@ export async function POST(request: Request) {
       console.error('[ai/draft] usage log skipped:', logErr)
     }
 
-    return NextResponse.json({ draft: text })
+    // Draft mode's prompt doesn't ask for a lead-grade tag, but
+    // strip defensively in case a future prompt change or a
+    // prompt-injected model turn emits one — an agent should never
+    // see <GRADE>...</GRADE> in a suggested reply.
+    const { text: cleanText } = extractGrade(text)
+    return NextResponse.json({ draft: cleanText })
   } catch (err) {
     if (err instanceof AiError) {
       return NextResponse.json(

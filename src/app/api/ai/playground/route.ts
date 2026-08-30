@@ -5,6 +5,7 @@ import { loadAiConfig } from '@/lib/ai/config'
 import { retrieveKnowledge } from '@/lib/ai/knowledge'
 import { generateReply } from '@/lib/ai/generate'
 import { buildSystemPrompt } from '@/lib/ai/defaults'
+import { extractGrade } from '@/lib/ai/grading'
 import { latestUserMessage } from '@/lib/ai/query'
 import { AiError, type ChatMessage } from '@/lib/ai/types'
 
@@ -85,8 +86,13 @@ export async function POST(request: Request) {
       defaultLanguage: config.defaultLanguage,
     })
 
-    const { text, handoff } = await generateReply({ config, systemPrompt, messages })
-    return NextResponse.json({ reply: text, handoff })
+    const generated = await generateReply({ config, systemPrompt, messages })
+    // Strip the model's <GRADE>...</GRADE> tag from the preview so
+    // the Playground shows exactly what the customer would see on
+    // WhatsApp. Also return the grade so the operator can see how
+    // the model rated the exchange for lead-quality tuning.
+    const { grade, text } = extractGrade(generated.text)
+    return NextResponse.json({ reply: text, handoff: generated.handoff, grade })
   } catch (err) {
     if (err instanceof AiError) {
       return NextResponse.json(
