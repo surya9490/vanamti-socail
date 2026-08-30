@@ -23,6 +23,7 @@ describe('logAiUsage', () => {
     expect(insert).toHaveBeenCalledWith({
       account_id: 'acct-1',
       conversation_id: 'conv-1',
+      contact_id: null,
       mode: 'auto_reply',
       provider: 'anthropic',
       model: 'claude-x',
