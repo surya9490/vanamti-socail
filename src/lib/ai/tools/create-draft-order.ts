@@ -72,7 +72,7 @@ export const createDraftOrderTool: AiTool = {
       shop_product_id: {
         type: 'STRING',
         description:
-          'The product id from product_lookup (numeric string, e.g. "8123456789"). Required.',
+          'The product id shown as [product_id: X] in the product_lookup output. Preferred when you have it. Can be omitted if you pass variant_id — the tool will look up the parent product from the variant.',
       },
       variant_id: {
         type: 'STRING',
@@ -119,7 +119,12 @@ export const createDraftOrderTool: AiTool = {
           '6-digit Indian postal PIN code. Optional; see address_line1. Must be exactly 6 digits if provided.',
       },
     },
-    required: ['shop_product_id'],
+    // Nothing strictly required — either shop_product_id OR variant_id
+    // identifies the product, and the runtime handles the missing case
+    // with a clear corrective error. Prevents the model from being
+    // "trapped" by the schema when it forgot one identifier but knows
+    // the other from earlier in the transcript.
+    required: [],
   },
   async run(args, ctx) {
     if (!draftOrderConfigured()) return UNAVAILABLE
@@ -150,8 +155,8 @@ export const createDraftOrderTool: AiTool = {
     const state = typeof args.state === 'string' ? args.state.trim() : ''
     const pincode = typeof args.pincode === 'string' ? args.pincode.trim() : ''
 
-    if (!shopProductId) {
-      return 'Missing shop_product_id — call product_lookup first to get the correct id.'
+    if (!shopProductId && !variantId) {
+      return 'Missing both shop_product_id and variant_id — call product_lookup to get the values (shown as [product_id: X] and [variant_id: Y] in the output) and re-call.'
     }
 
     // Partial address? Reject it — Shopify's checkout can pre-fill
@@ -170,23 +175,62 @@ export const createDraftOrderTool: AiTool = {
       return `The pincode "${pincode}" doesn't look right — please ask for a valid 6-digit Indian PIN code.`
     }
 
-    // Verify the product (and variant if specified) actually exists
-    // in our cache before we ask Shopify. A stale model call for a
-    // non-existent product should fail fast with a clear message
-    // rather than surface as an opaque Shopify error.
-    const { data: product, error: productErr } = await ctx.db
-      .from('products')
-      .select('variants, title, is_active')
-      .eq('account_id', ctx.accountId)
-      .eq('shop_product_id', shopProductId)
-      .maybeSingle()
-    if (productErr) {
-      console.warn('[create_draft_order] product lookup failed:', productErr)
-      return UNAVAILABLE
+    // Resolve the product. Prefer shop_product_id if given, but fall
+    // back to a reverse-lookup from variant_id (variants are globally
+    // unique in Shopify, and our variants JSONB has a GIN index that
+    // makes `variants @> [{id: X}]` cheap). This means the model can
+    // pass just variant_id when it knows the size but forgot the
+    // product id — the tool self-heals instead of erroring.
+    let product: { variants?: unknown; title?: string; is_active?: boolean } | null = null
+
+    if (shopProductId) {
+      const { data, error: productErr } = await ctx.db
+        .from('products')
+        .select('shop_product_id, variants, title, is_active')
+        .eq('account_id', ctx.accountId)
+        .eq('shop_product_id', shopProductId)
+        .maybeSingle()
+      if (productErr) {
+        console.warn('[create_draft_order] product lookup failed:', productErr)
+        return UNAVAILABLE
+      }
+      product = data as typeof product
     }
-    if (!product || !(product as { is_active?: boolean }).is_active) {
-      return `Product ${shopProductId} isn't available right now.`
+
+    // Fallback: shop_product_id absent OR didn't match a row → try
+    // to find the parent product by variant_id via a JSONB contains
+    // query.
+    if (!product && variantId) {
+      const { data, error: byVariantErr } = await ctx.db
+        .from('products')
+        .select('shop_product_id, variants, title, is_active')
+        .eq('account_id', ctx.accountId)
+        .contains('variants', [{ id: variantId }])
+        .limit(1)
+        .maybeSingle()
+      if (byVariantErr) {
+        console.warn(
+          '[create_draft_order] product-by-variant lookup failed:',
+          byVariantErr,
+        )
+        return UNAVAILABLE
+      }
+      product = data as typeof product
     }
+
+    if (!product) {
+      // Neither identifier resolved to a real row. Coach the model to
+      // re-check product_lookup output rather than tell the customer
+      // anything about "unavailable" (which they'd read as out-of-stock).
+      return `Couldn't resolve product from shop_product_id="${shopProductId}" or variant_id="${variantId}". Call product_lookup again and copy the exact [product_id: X] and [variant_id: Y] values shown in the output — do NOT invent ids or use URL slugs.`
+    }
+    if (!(product as { is_active?: boolean }).is_active) {
+      return `Product resolved but is currently inactive in the catalogue. Fall back to sharing the product URL and ask the customer to complete purchase on the website.`
+    }
+    // From here on, refer to the RESOLVED shop_product_id in error
+    // messages — the caller might have passed only a variant_id.
+    const resolvedShopProductId =
+      (product as { shop_product_id?: string }).shop_product_id || shopProductId
     const variants = Array.isArray((product as { variants?: unknown }).variants)
       ? ((product as { variants: unknown[] }).variants as Array<{
           id?: string
@@ -197,7 +241,7 @@ export const createDraftOrderTool: AiTool = {
     let resolvedVariantId = variantId
     if (!resolvedVariantId) {
       if (variants.length === 0) {
-        return `Product ${shopProductId} has no variant on file — try refreshing the catalogue backfill.`
+        return `Product ${resolvedShopProductId} has no variant on file — try refreshing the catalogue backfill.`
       }
       if (variants.length === 1) {
         const only = variants[0]
@@ -221,22 +265,22 @@ export const createDraftOrderTool: AiTool = {
           // Ambiguous — pass a clear next-step for the MODEL. Never
           // shown to the customer; the model should list variants
           // to the customer and let them clarify.
-          return `Variant title "${variantTitle}" matched multiple variants on ${shopProductId}. Ask the customer which specific size they want, then re-call with the exact variant_title or variant_id.`
+          return `Variant title "${variantTitle}" matched multiple variants on ${resolvedShopProductId}. Ask the customer which specific size they want, then re-call with the exact variant_title or variant_id.`
         } else {
           // No fuzzy match — same treatment as no-variant-id.
-          return `Couldn't match variant "${variantTitle}" on product ${shopProductId}. Call product_lookup for this product to see the exact variant titles, decide which one the customer wants, and re-call create_draft_order with variant_id or variant_title.`
+          return `Couldn't match variant "${variantTitle}" on product ${resolvedShopProductId}. Call product_lookup for this product to see the exact variant titles, decide which one the customer wants, and re-call create_draft_order with variant_id or variant_title.`
         }
       } else {
         // Multi-variant + no title hint from the model. Tell the
         // model to look them up — this branch is a coding-side
         // hint for the model, never surfaced verbatim.
-        return `Product ${shopProductId} has multiple variants. Call product_lookup for this product, decide the variant matching the customer's stated size/option, then re-call create_draft_order with variant_id or variant_title.`
+        return `Product ${resolvedShopProductId} has multiple variants. Call product_lookup for this product, decide the variant matching the customer's stated size/option, then re-call create_draft_order with variant_id or variant_title.`
       }
     } else {
       // Verify the model-supplied variant belongs to this product.
       const match = variants.find((v) => v.id === resolvedVariantId)
       if (!match) {
-        return `Variant ${resolvedVariantId} isn't on product ${shopProductId}. Call product_lookup to get current variant ids for this product and re-call with the correct one.`
+        return `Variant ${resolvedVariantId} isn't on product ${resolvedShopProductId}. Call product_lookup to get current variant ids for this product and re-call with the correct one.`
       }
     }
 

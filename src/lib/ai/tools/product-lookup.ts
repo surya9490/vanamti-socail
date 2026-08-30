@@ -31,6 +31,7 @@ const MAX_RESULTS = 5
 
 interface ProductRow {
   title: string
+  shop_product_id: string
   price_min: number | null
   price_max: number | null
   currency: string | null
@@ -72,6 +73,12 @@ function formatVariantLine(v: ProductVariant, currency: string | null): string {
 
 function formatRow(row: ProductRow): string {
   const variants = coerceVariants(row.variants)
+  // product_id is REQUIRED for the model to pass to create_draft_order.
+  // Show it prominently in a labelled bracket — customer never sees the
+  // tool output, so being verbose here is safe and it stops the model
+  // from hallucinating IDs (which was happening — the model was
+  // sometimes grabbing the URL slug or making up 13-digit numbers).
+  const idTag = ` [product_id: ${row.shop_product_id}]`
   const url = row.product_url ? ` (${row.product_url})` : ''
 
   // Signals that this product is multi-variant even when we don't
@@ -88,13 +95,13 @@ function formatRow(row: ProductRow): string {
   if (variants.length <= 1 && !priceRangeSuggestsMultiVariant) {
     const solo = variants[0]
     const inlineVariantId = solo ? ` [variant_id: ${solo.id}]` : ''
-    return `• ${row.title}${formatPriceRange(row)}${url}${inlineVariantId}`
+    return `• ${row.title}${idTag}${formatPriceRange(row)}${url}${inlineVariantId}`
   }
 
   // Multi-variant with variant array populated → fan out per variant
   // so the model can pick the right one.
   if (variants.length > 1) {
-    const header = `• ${row.title}${url}`
+    const header = `• ${row.title}${idTag}${url}`
     const varLines = variants
       .map((v) => formatVariantLine(v, row.currency))
       .join('\n')
@@ -109,7 +116,7 @@ function formatRow(row: ProductRow): string {
   // choose on the site) instead of trying to create a draft it
   // has no variant data for.
   return (
-    `• ${row.title}${formatPriceRange(row)}${url}` +
+    `• ${row.title}${idTag}${formatPriceRange(row)}${url}` +
     `\n    (variants not cached for this product — do NOT call create_draft_order; ` +
     `share the product URL and ask the customer to pick their size on the website)`
   )
@@ -139,7 +146,7 @@ export const productLookupTool: AiTool = {
 
     let query = ctx.db
       .from('products')
-      .select('title, price_min, price_max, currency, product_url, variants')
+      .select('title, shop_product_id, price_min, price_max, currency, product_url, variants')
       .eq('account_id', ctx.accountId)
       .eq('is_active', true)
       .limit(MAX_RESULTS)
