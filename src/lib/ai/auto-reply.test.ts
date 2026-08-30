@@ -121,6 +121,8 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
 }
 
 beforeEach(() => {
+  // Debounce is skipped in tests; production defaults to 8s.
+  process.env.AI_MESSAGE_BATCH_WAIT_SECONDS = '0'
   h.state.conv = {
     assigned_agent_id: null,
     ai_autoreply_disabled: false,
@@ -148,14 +150,11 @@ beforeEach(() => {
 })
 
 describe('dispatchInboundToAiReply — eligibility gates', () => {
-  it('claims a slot and sends on the happy path', async () => {
+  it('sends on the happy path (no atomic slot claim, cap removed)', async () => {
     await dispatchInboundToAiReply(ARGS)
-    expect(h.state.rpcCalls).toEqual([
-      {
-        name: 'claim_ai_reply_slot',
-        args: { conversation_id: 'conv-1', max_replies: 3 },
-      },
-    ])
+    // The claim_ai_reply_slot RPC is no longer used — the per-
+    // conversation cap was removed. No cap-related RPC calls fire.
+    expect(h.state.rpcCalls).toEqual([])
     expect(h.engineSendText).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-1', text: 'Hello!' }),
     )
@@ -176,12 +175,19 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('does not send when the atomic slot claim loses the race', async () => {
-    h.state.claim = false
+  it('keeps replying past the old cap (per-conversation cap was removed)', async () => {
+    // A conversation with ai_reply_count already at 100 (well past
+    // the old default cap of 3) still gets a reply — the cap
+    // enforcement was removed. Only the 30s cooldown, the
+    // ai_autoreply_disabled flag, assigned_agent_id, and the
+    // master switch can stop a reply now.
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: false,
+      ai_reply_count: 100,
+    }
     await dispatchInboundToAiReply(ARGS)
-    // It still attempts the claim, but the send is skipped.
-    expect(h.state.rpcCalls).toHaveLength(1)
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalled()
   })
 
   it('skips when AI is off / not configured', async () => {
@@ -212,16 +218,6 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
       assigned_agent_id: null,
       ai_autoreply_disabled: true,
       ai_reply_count: 0,
-    }
-    await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).not.toHaveBeenCalled()
-  })
-
-  it('skips when the per-conversation cap is reached', async () => {
-    h.state.conv = {
-      assigned_agent_id: null,
-      ai_autoreply_disabled: false,
-      ai_reply_count: 3,
     }
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()

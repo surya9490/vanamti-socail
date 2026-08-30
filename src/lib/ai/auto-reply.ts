@@ -82,9 +82,15 @@ export async function dispatchInboundToAiReply(
     if (convErr || !conv) return
     if (conv.assigned_agent_id) return // a human owns this thread
     if (conv.ai_autoreply_disabled) return // handed off / turned off here
-    // Cheap early-out; the authoritative cap check is the atomic claim
-    // below (this read can race a concurrent inbound).
-    if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) return
+    // Per-conversation reply cap removed per operator request: sales
+    // conversations routinely need 5–10 turns to close (greet →
+    // pick → confirm → address → link → follow-ups), and a hard
+    // ceiling of 3 was killing threads mid-close. The 30-second
+    // cooldown below still prevents rapid-fire loops; the master
+    // switch (config.autoReplyEnabled) and the per-conversation
+    // ai_autoreply_disabled flag remain as the kill switches.
+    // ai_reply_count is still incremented after each send for
+    // analytics.
 
     // Per-conversation cooldown: if we ai-replied to this conversation
     // within the last AI_REPLY_COOLDOWN_SECONDS, skip.
@@ -169,11 +175,53 @@ export async function dispatchInboundToAiReply(
       }
     }
 
-    // Account-wide throttle on the shared BYO key. The per-conversation
-    // cap bounds one thread; this bounds a burst across many threads (a
-    // marketing blast landing 200 replies at once) so we never run the
-    // owner's key past the provider's rate limit. Over the limit → skip
-    // the auto-reply; the inbound still sits in the inbox for a human.
+    // Message-batch debounce — give the customer a moment to finish
+    // typing. Customers on WhatsApp routinely send "hi" then "i want
+    // honey" then "the 250ml one" as three separate messages within
+    // 10 seconds; replying to the FIRST one turns a natural close
+    // ("great, 250ml Forest Honey — ₹549, shall I set it up?") into
+    // three separate replies that all miss the actual question.
+    //
+    // Debounce: sleep BATCH_WAIT_SECONDS, then check whether a NEWER
+    // customer message arrived while we waited. If yes, this dispatch
+    // is superseded — a later dispatch (fired by that newer message)
+    // will handle the whole batch. Skip.
+    //
+    // Trade-off: adds ~BATCH_WAIT_SECONDS latency to every reply. At
+    // 8 seconds this reads as "assistant is thinking" rather than
+    // "too slow"; well within human conversational tempo. The
+    // webhook's after() block keeps the serverless container alive
+    // for the wait.
+    const batchWaitSecondsRaw = Number(
+      process.env.AI_MESSAGE_BATCH_WAIT_SECONDS,
+    )
+    const batchWaitSeconds =
+      Number.isFinite(batchWaitSecondsRaw) && batchWaitSecondsRaw >= 0
+        ? batchWaitSecondsRaw
+        : 8
+    if (batchWaitSeconds > 0) {
+      const debounceStartedAt = new Date().toISOString()
+      await new Promise((r) => setTimeout(r, batchWaitSeconds * 1000))
+      const { data: newerInbound } = await db
+        .from('messages')
+        .select('id')
+        .eq('conversation_id', conversationId)
+        .eq('sender_type', 'customer')
+        .gt('created_at', debounceStartedAt)
+        .limit(1)
+      if (newerInbound && newerInbound.length > 0) {
+        console.log(
+          `[ai auto-reply] newer inbound arrived during ${batchWaitSeconds}s debounce on ${conversationId} — skipping this trigger`,
+        )
+        return
+      }
+    }
+
+    // Account-wide throttle on the shared BYO key. This bounds a
+    // burst across many threads (a marketing blast landing 200
+    // replies at once) so we never run the owner's key past the
+    // provider's rate limit. Over the limit → skip the auto-reply;
+    // the inbound still sits in the inbox for a human.
     const acctLimit = checkRateLimit(
       `ai-autoreply:${accountId}`,
       RATE_LIMITS.aiAutoReplyAccount,
@@ -329,27 +377,14 @@ export async function dispatchInboundToAiReply(
       return
     }
 
-    // Atomically claim a reply slot: the cap check + increment happen in
-    // one UPDATE, so concurrent inbounds can never overshoot the cap. If
-    // another inbound just took the last slot, `claimed` is false and we
-    // skip the send. (We consume a slot slightly before the send lands —
-    // fail-safe: under-reply rather than over-reply.)
-    const { data: claimed, error: claimErr } = await db.rpc(
-      'claim_ai_reply_slot',
-      {
-        conversation_id: conversationId,
-        max_replies: config.autoReplyMaxPerConversation,
-      },
-    )
-    if (claimErr) {
-      // A real error here (vs. losing the cap race) is almost always a
-      // deploy issue — e.g. `claim_ai_reply_slot` not EXECUTE-able by the
-      // service role, or the migration not applied. Log it loudly: a
-      // silent return makes "auto-reply never fires" undiagnosable.
-      console.error('[ai auto-reply] claim_ai_reply_slot failed:', claimErr)
-      return
-    }
-    if (claimed !== true) return // lost the per-conversation cap race
+    // Counter increment for analytics — no cap enforced (operator
+    // removed the per-conversation cap; sales conversations need
+    // 5–10 turns to close). Fire-and-forget: a failure here must
+    // not block the send that the customer is waiting for.
+    void db
+      .from('conversations')
+      .update({ ai_reply_count: (conv.ai_reply_count ?? 0) + 1 })
+      .eq('id', conversationId)
 
     await engineSendText({
       accountId,
