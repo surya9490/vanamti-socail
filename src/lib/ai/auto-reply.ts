@@ -16,6 +16,7 @@ import {
 } from '@/lib/notify/slack'
 import { extractGrade, nextGrade, type LeadStage } from './grading'
 import { mirrorLeadStageToTag } from '@/lib/contacts/lead-tag'
+import { log, newTraceId } from '@/lib/log'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -50,8 +51,15 @@ export async function dispatchInboundToAiReply(
   args: DispatchArgs,
 ): Promise<void> {
   const { accountId, conversationId, contactId, configOwnerUserId } = args
+  const trace_id = newTraceId('ar')
 
   try {
+    log.info('auto_reply.dispatched', {
+      trace_id,
+      account_id: accountId,
+      conversation_id: conversationId,
+      contact_id: contactId,
+    })
     const db = supabaseAdmin()
 
     const config = await loadAiConfig(db, accountId)
@@ -122,9 +130,12 @@ export async function dispatchInboundToAiReply(
       .gt('created_at', cooldownCutoff)
       .limit(1)
     if (recentAi && recentAi.length > 0) {
-      console.log(
-        `[ai auto-reply] cooldown active on conversation ${conversationId} (last AI reply < ${AI_REPLY_COOLDOWN_SECONDS}s ago) — skipping.`,
-      )
+      log.info('auto_reply.skipped', {
+        trace_id,
+        reason: 'cooldown_active',
+        cooldown_seconds: AI_REPLY_COOLDOWN_SECONDS,
+        conversation_id: conversationId,
+      })
       return
     }
 
@@ -219,9 +230,12 @@ export async function dispatchInboundToAiReply(
           .gt('created_at', debounceStartedAt)
           .limit(1)
         if (newerInbound && newerInbound.length > 0) {
-          console.log(
-            `[ai auto-reply] newer inbound arrived during ${batchWaitSeconds}s debounce on ${conversationId} — skipping this trigger`,
-          )
+          log.info('auto_reply.skipped', {
+            trace_id,
+            reason: 'superseded_by_newer_inbound',
+            debounce_seconds: batchWaitSeconds,
+            conversation_id: conversationId,
+          })
           return
         }
       }
@@ -255,9 +269,13 @@ export async function dispatchInboundToAiReply(
           0,
         ) ?? 0
       if (spent >= dailyBudget) {
-        console.warn(
-          `[ai auto-reply] contact ${contactId} exceeded 24h token budget (${spent} >= ${dailyBudget}) — skipping reply.`,
-        )
+        log.warn('auto_reply.skipped', {
+          trace_id,
+          reason: 'contact_token_budget_exceeded',
+          contact_id: contactId,
+          spent,
+          budget: dailyBudget,
+        })
         return
       }
     }
@@ -272,9 +290,11 @@ export async function dispatchInboundToAiReply(
       RATE_LIMITS.aiAutoReplyAccount,
     )
     if (!acctLimit.success) {
-      console.warn(
-        `[ai auto-reply] account ${accountId} hit the per-account rate limit — skipping this inbound.`,
-      )
+      log.warn('auto_reply.skipped', {
+        trace_id,
+        reason: 'account_rate_limit',
+        account_id: accountId,
+      })
       return
     }
 
@@ -386,6 +406,12 @@ export async function dispatchInboundToAiReply(
         update.assigned_agent_id = config.handoffAgentId
       }
       await db.from('conversations').update(update).eq('id', conversationId)
+      log.info('auto_reply.handed_off', {
+        trace_id,
+        conversation_id: conversationId,
+        contact_id: contactId,
+        assigned_agent_id: config.handoffAgentId ?? null,
+      })
 
       // Slack notification — awaited, NOT fire-and-forget.
       //
@@ -453,6 +479,15 @@ export async function dispatchInboundToAiReply(
       text,
       aiGenerated: true,
     })
+    log.info('auto_reply.sent', {
+      trace_id,
+      conversation_id: conversationId,
+      contact_id: contactId,
+      text_length: text.length,
+      grade: grade ?? null,
+      tokens_prompt: usage?.promptTokens ?? null,
+      tokens_completion: usage?.completionTokens ?? null,
+    })
 
     // Ratchet the contact's lead_stage and mirror to the tag
     // system. Wrapped in try/catch and awaited (we're inside the
@@ -492,6 +527,11 @@ export async function dispatchInboundToAiReply(
       }
     }
   } catch (err) {
-    console.error('[ai auto-reply] dispatch failed:', err)
+    log.error('auto_reply.dispatch_failed', {
+      trace_id,
+      account_id: accountId,
+      conversation_id: conversationId,
+      error: err instanceof Error ? err.message : String(err),
+    })
   }
 }
