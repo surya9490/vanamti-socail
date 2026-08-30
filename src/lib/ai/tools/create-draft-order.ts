@@ -181,7 +181,12 @@ export const createDraftOrderTool: AiTool = {
     // makes `variants @> [{id: X}]` cheap). This means the model can
     // pass just variant_id when it knows the size but forgot the
     // product id — the tool self-heals instead of erroring.
-    let product: { variants?: unknown; title?: string; is_active?: boolean } | null = null
+    let product: {
+      shop_product_id?: string
+      variants?: unknown
+      title?: string
+      is_active?: boolean
+    } | null = null
 
     if (shopProductId) {
       const { data, error: productErr } = await ctx.db
