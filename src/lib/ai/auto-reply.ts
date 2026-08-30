@@ -17,6 +17,7 @@ import {
 import { extractGrade, nextGrade, type LeadStage } from './grading'
 import { mirrorLeadStageToTag } from '@/lib/contacts/lead-tag'
 import { log, newTraceId } from '@/lib/log'
+import { pickModelForAutoReply } from './router'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -349,8 +350,22 @@ export async function dispatchInboundToAiReply(
       }
     }
 
-    const generated = await generateReply({
+    // Route to a cheaper/faster model on turns that clearly don't
+    // need the bigger one (greetings, generic Q&A, browsing). The
+    // router is conservative — anything with buying signals, an
+    // address, a PIN code, handoff keywords, or a short affirmative
+    // when the draft-order tool is enabled stays on the configured
+    // (bigger) model. See src/lib/ai/router.ts for the full rules.
+    const routedModel = pickModelForAutoReply({
       config,
+      latestUserMessage: latestUserMessage(messages),
+      hasCreateOrderTool: tools.some((t) => t.name === 'create_draft_order'),
+    })
+    const configForCall =
+      routedModel === config.model ? config : { ...config, model: routedModel }
+
+    const generated = await generateReply({
+      config: configForCall,
       systemPrompt,
       messages,
       tools,
@@ -380,7 +395,10 @@ export async function dispatchInboundToAiReply(
       contactId,
       mode: 'auto_reply',
       provider: config.provider,
-      model: config.model,
+      // Record the ACTUALLY-used model, not the account default —
+      // otherwise usage analytics would misreport spend across
+      // Sonnet vs Haiku when the router downgrades a turn.
+      model: routedModel,
       usage,
     })
 
@@ -483,6 +501,8 @@ export async function dispatchInboundToAiReply(
       trace_id,
       conversation_id: conversationId,
       contact_id: contactId,
+      model: routedModel,
+      routed: routedModel !== config.model,
       text_length: text.length,
       grade: grade ?? null,
       tokens_prompt: usage?.promptTokens ?? null,
