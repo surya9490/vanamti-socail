@@ -13,10 +13,14 @@ import {
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
 const ANTHROPIC_VERSION = '2023-06-01'
 
-/** Max model⇄tool round-trips before we force a text answer. Mirrors the
- *  Gemini cap in providers/gemini.ts and bounds token spend on runaway
- *  tool loops. */
-const MAX_TOOL_ROUNDS = 4
+/** Max model⇄tool round-trips before we force a text answer. Bounds
+ *  token spend on runaway tool loops. Raised from 4 to 6 after a
+ *  real conversation exhausted the budget while the model tried to
+ *  recover from a self-inflicted "call product_lookup first" tool
+ *  error — one round for the initial mistake, one for the recovery
+ *  call, one for the retry, one for the final text = 4 minimum on
+ *  a recovery path. 6 gives 2 rounds of slack. */
+const MAX_TOOL_ROUNDS = 6
 
 /** Retry policy for 5xx / timeout / network errors. Anthropic's
  *  Messages API is usually reliable; a single retry with a short
@@ -361,6 +365,20 @@ export async function generateAnthropicWithTools(
         result = 'The tool could not be run right now.'
         isError = true
       }
+      // Structured trace of the tool call so a future
+      // dispatch_failed can be replayed from the logs — args are
+      // truncated to keep the line grep-friendly (customer PII in
+      // an address field will fit within 200 chars).
+      console.log(
+        JSON.stringify({
+          event: 'ai.tool_call',
+          round,
+          tool: call.name,
+          is_error: isError,
+          args_preview: JSON.stringify(call.input ?? {}).slice(0, 400),
+          result_preview: result.slice(0, 200),
+        }),
+      )
       results.push({
         type: 'tool_result',
         tool_use_id: call.id,
