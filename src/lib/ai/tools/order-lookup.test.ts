@@ -3,14 +3,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { orderLookupTool } from './order-lookup'
 import type { ToolContext } from './registry'
 import {
-  ASK_FOR_ORDER_NUMBER,
   LOOKUP_UNAVAILABLE,
   orderTrackingConfigured,
   fetchOrderStatusReply,
+  fetchRecentOrdersReply,
 } from '@/lib/orders/order-tracking'
 
-// Keep the real extractOrderNumber + copy constants; stub only the two
-// side-effecting functions (env check + network call).
+// Keep the real extractOrderNumber + copy constants; stub only the
+// side-effecting functions (env check + network calls).
 vi.mock('@/lib/orders/order-tracking', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@/lib/orders/order-tracking')>()
@@ -18,6 +18,10 @@ vi.mock('@/lib/orders/order-tracking', async (importOriginal) => {
     ...actual,
     orderTrackingConfigured: vi.fn(() => true),
     fetchOrderStatusReply: vi.fn(async () => 'Order #1024 is out for delivery.'),
+    fetchRecentOrdersReply: vi.fn(
+      async () =>
+        "Here are your 2 recent orders:\n\n📦 Order #1024 (Aug 25) — Shipped\n✅ Order #1005 (Aug 20) — Delivered",
+    ),
   }
 })
 
@@ -36,6 +40,9 @@ beforeEach(() => {
   vi.mocked(orderTrackingConfigured).mockReturnValue(true)
   vi.mocked(fetchOrderStatusReply).mockResolvedValue(
     'Order #1024 is out for delivery.',
+  )
+  vi.mocked(fetchRecentOrdersReply).mockResolvedValue(
+    "Here are your 2 recent orders:\n\n📦 Order #1024 (Aug 25) — Shipped\n✅ Order #1005 (Aug 20) — Delivered",
   )
 })
 
@@ -56,9 +63,13 @@ describe('orderLookupTool', () => {
     )
   })
 
-  it('asks for the number when none was given', async () => {
+  it('lists recent orders by phone when no order number was given', async () => {
     const result = await orderLookupTool.run({}, ctx())
-    expect(result).toBe(ASK_FOR_ORDER_NUMBER)
+    expect(result).toContain('recent orders')
+    expect(fetchRecentOrdersReply).toHaveBeenCalledWith({
+      senderPhone: '+15551234567',
+    })
+    // The per-order lookup should NOT fire when we don't have a number.
     expect(fetchOrderStatusReply).not.toHaveBeenCalled()
   })
 

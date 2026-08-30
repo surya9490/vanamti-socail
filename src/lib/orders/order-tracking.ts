@@ -93,3 +93,39 @@ export async function fetchOrderStatusReply(params: {
     return null
   }
 }
+
+/**
+ * Ask the Vanamati app for this customer's recent orders based on
+ * their WhatsApp phone. Used when the customer expressed order
+ * intent but didn't provide an order number — no need to make them
+ * hunt for it in their confirmation email.
+ *
+ * Returns the ready-to-send reply (a short list of recent orders
+ * with statuses + tracking links), or null on lookup failure.
+ * Callers decide the fallback copy.
+ */
+export async function fetchRecentOrdersReply(params: {
+  senderPhone: string
+  limit?: number
+}): Promise<string | null> {
+  if (!orderTrackingConfigured()) return null
+  try {
+    const qs = new URLSearchParams({ phone: params.senderPhone })
+    if (params.limit) qs.set('limit', String(params.limit))
+    const url = `${VANAMATI_APP_URL}/api/orders/by-phone?${qs.toString()}`
+    const resp = await fetch(url, {
+      headers: { 'x-api-key': VANAMATI_ORDER_STATUS_KEY },
+    })
+    const json = (await resp.json().catch(() => null)) as {
+      message?: string
+    } | null
+    if (!json || typeof json.message !== 'string' || !json.message) return null
+    return json.message
+  } catch (error) {
+    console.error(
+      '[order-tracking] by-phone lookup failed:',
+      error instanceof Error ? error.message : error,
+    )
+    return null
+  }
+}
