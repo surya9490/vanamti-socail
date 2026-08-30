@@ -6,6 +6,10 @@ export interface LogAiUsageArgs {
   /** Null for a draft not tied to one thread, or when the row was
    *  deleted between generation and logging. */
   conversationId: string | null
+  /** Present for auto-reply (the customer we spent tokens on),
+   *  usually null for admin-side drafts. Powers the per-contact
+   *  daily token budget check in auto-reply.ts. */
+  contactId?: string | null
   mode: 'auto_reply' | 'draft'
   provider: AiProvider
   model: string
@@ -35,6 +39,7 @@ export async function logAiUsage(
     const { error } = await db.from('ai_usage_log').insert({
       account_id: args.accountId,
       conversation_id: args.conversationId,
+      contact_id: args.contactId ?? null,
       mode: args.mode,
       provider: args.provider,
       model: args.model,

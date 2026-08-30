@@ -73,6 +73,17 @@ vi.mock('./admin-client', () => ({
         }
         return chain
       }
+      if (table === 'ai_usage_log') {
+        // Budget check: SUM(total_tokens) WHERE contact_id=X AND
+        // created_at > 24h ago. Mock always returns 0 spent, so the
+        // budget never trips in tests.
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          gt: () => Promise.resolve({ data: [], error: null }),
+        }
+        return chain
+      }
       // conversations + contacts fallthrough — the auto-reply path
       // reads both with chained .eq() (one or two levels). A recursive
       // eq() that returns the same builder keeps the mock forgiving

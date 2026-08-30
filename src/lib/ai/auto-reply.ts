@@ -227,6 +227,41 @@ export async function dispatchInboundToAiReply(
       }
     }
 
+    // Per-contact daily token budget — guards against runaway spend
+    // from a single (malicious / broken / bot) customer. Sums
+    // total_tokens across ai_usage_log entries for this contact in
+    // the last 24h; skips the reply if over.
+    //
+    // Default 20_000 tokens/contact/day (~50 replies) is enough for
+    // any legitimate sales conversation and small enough that a
+    // rogue looper is capped at ~₹1.5/day. Tunable via
+    // AI_DAILY_TOKEN_BUDGET_PER_CONTACT. Set to 0 to disable
+    // the check entirely.
+    const budgetRaw = Number(process.env.AI_DAILY_TOKEN_BUDGET_PER_CONTACT)
+    const dailyBudget =
+      Number.isFinite(budgetRaw) && budgetRaw >= 0 ? budgetRaw : 20_000
+    if (dailyBudget > 0) {
+      const dayCutoff = new Date(
+        Date.now() - 24 * 60 * 60 * 1000,
+      ).toISOString()
+      const { data: usageRows } = await db
+        .from('ai_usage_log')
+        .select('total_tokens')
+        .eq('contact_id', contactId)
+        .gt('created_at', dayCutoff)
+      const spent =
+        (usageRows as { total_tokens?: number }[] | null)?.reduce(
+          (sum, r) => sum + (r.total_tokens ?? 0),
+          0,
+        ) ?? 0
+      if (spent >= dailyBudget) {
+        console.warn(
+          `[ai auto-reply] contact ${contactId} exceeded 24h token budget (${spent} >= ${dailyBudget}) — skipping reply.`,
+        )
+        return
+      }
+    }
+
     // Account-wide throttle on the shared BYO key. This bounds a
     // burst across many threads (a marketing blast landing 200
     // replies at once) so we never run the owner's key past the
@@ -322,6 +357,7 @@ export async function dispatchInboundToAiReply(
     void logAiUsage(db, {
       accountId,
       conversationId,
+      contactId,
       mode: 'auto_reply',
       provider: config.provider,
       model: config.model,
