@@ -53,13 +53,26 @@ const KEY_PLACEHOLDER: Record<AiProvider, string> = {
 // Tools the assistant can be given (function calling). Kept in lockstep
 // with the server-side registry in src/lib/ai/tools/registry.ts — the
 // server drops any name not in the registry, so a drift here is harmless.
-// Function calling currently runs on Gemini only.
+// Function calling runs on Gemini AND Claude (Anthropic); OpenAI is
+// text-only for now — enabled tools are silently ignored on that provider.
 const AVAILABLE_TOOLS: { name: string; label: string; description: string }[] = [
   {
     name: 'order_lookup',
     label: 'Order lookup',
     description:
       "Let the assistant look up a customer's order status inline, using their phone number and your Vanamati store (needs VANAMATI_APP_URL + VANAMATI_ORDER_STATUS_KEY).",
+  },
+  {
+    name: 'product_lookup',
+    label: 'Product catalogue lookup',
+    description:
+      "Let the assistant quote real products with live prices from your Vanamati Shopify catalogue (populated by product webhooks + backfill). Without this, the AI can only mention products it finds in the knowledge base.",
+  },
+  {
+    name: 'create_draft_order',
+    label: 'Create draft order',
+    description:
+      "Let the assistant place orders inside the chat — collects delivery details, creates a real Shopify draft order, and sends the customer a payment link. Requires product_lookup to be enabled, plus VANAMATI_APP_URL + VANAMATI_ORDER_STATUS_KEY.",
   },
 ];
 
