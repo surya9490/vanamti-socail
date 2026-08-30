@@ -29,9 +29,6 @@ import type { AiTool } from './registry'
 const UNAVAILABLE =
   'The order-creation system is temporarily unavailable. Please share the product page link with the customer and ask them to check out on the website.'
 
-const MISSING_ADDRESS =
-  'Missing address details — I need full name, address line 1, city, state, and 6-digit pincode before I can create the order.'
-
 function draftOrderConfigured(): boolean {
   return Boolean(
     process.env.VANAMATI_APP_URL && process.env.VANAMATI_ORDER_STATUS_KEY,
@@ -47,8 +44,8 @@ export const createDraftOrderTool: AiTool = {
   label: 'Create draft order',
   description:
     'Create a Shopify draft order for the customer and return a payment link. ' +
-    'Call ONLY after: (a) product + variant + quantity are confirmed by the customer, ' +
-    '(b) name + full address (line 1, city, state, 6-digit pincode) have been collected. ' +
+    'Call as SOON as the customer confirms they want to buy a specific product (variant + quantity). ' +
+    'Address fields are OPTIONAL — if the customer already shared their name and full address, pass them so the checkout is pre-filled; if not, call the tool with just product/variant/quantity and the customer will enter their address on the Shopify checkout page (which handles validation, autofill, and delivery serviceability). ' +
     'The tool returns a checkout URL — share the URL with the customer verbatim and tell them to complete payment there. ' +
     'Never claim the order is "placed" or "confirmed" — payment only completes when the customer pays at the URL.',
   parameters: {
@@ -71,40 +68,35 @@ export const createDraftOrderTool: AiTool = {
       },
       customer_name: {
         type: 'STRING',
-        description: "Customer's full name for the shipping label.",
+        description:
+          "Customer's full name for the shipping label. Optional — pass if collected, otherwise the customer enters it at Shopify checkout.",
       },
       address_line1: {
         type: 'STRING',
         description:
-          'Street address line 1 — house/flat number, street name.',
+          'Street address line 1 (house/flat number, street). Optional — if omitted, the customer enters at checkout. If you pass any address field, pass all of address_line1 + city + state + pincode together.',
       },
       address_line2: {
         type: 'STRING',
         description:
-          'Street address line 2 — landmark, apartment, area (optional).',
+          'Street address line 2 — landmark, apartment, area. Always optional.',
       },
       city: {
         type: 'STRING',
-        description: 'Delivery city (e.g. "Vijayawada").',
+        description: 'Delivery city. Optional; see address_line1.',
       },
       state: {
         type: 'STRING',
         description:
-          'Indian state (e.g. "Andhra Pradesh", "Karnataka") — full name, not code.',
+          'Indian state (full name, not code). Optional; see address_line1.',
       },
       pincode: {
         type: 'STRING',
-        description: '6-digit Indian postal PIN code (e.g. "533435").',
+        description:
+          '6-digit Indian postal PIN code. Optional; see address_line1. Must be exactly 6 digits if provided.',
       },
     },
-    required: [
-      'shop_product_id',
-      'customer_name',
-      'address_line1',
-      'city',
-      'state',
-      'pincode',
-    ],
+    required: ['shop_product_id'],
   },
   async run(args, ctx) {
     if (!draftOrderConfigured()) return UNAVAILABLE
@@ -133,17 +125,23 @@ export const createDraftOrderTool: AiTool = {
     const state = typeof args.state === 'string' ? args.state.trim() : ''
     const pincode = typeof args.pincode === 'string' ? args.pincode.trim() : ''
 
-    if (
-      !shopProductId ||
-      !customerName ||
-      !addressLine1 ||
-      !city ||
-      !state ||
-      !pincode
-    ) {
-      return MISSING_ADDRESS
+    if (!shopProductId) {
+      return 'Missing shop_product_id — call product_lookup first to get the correct id.'
     }
-    if (!looksLikeIndianPincode(pincode)) {
+
+    // Partial address? Reject it — Shopify's checkout can pre-fill
+    // NOTHING or ALL of it, but a half-filled address confuses the
+    // customer at checkout ("why is my city there but not my state").
+    // If the model got some fields but not all, ask for the rest
+    // rather than sending a broken draft.
+    const anyAddress = Boolean(
+      addressLine1 || city || state || pincode || addressLine2,
+    )
+    const fullAddress = Boolean(addressLine1 && city && state && pincode)
+    if (anyAddress && !fullAddress) {
+      return 'Address is partial — either collect ALL of: address line 1, city, state, and 6-digit pincode; or omit the address entirely and let the customer fill it at Shopify checkout.'
+    }
+    if (fullAddress && !looksLikeIndianPincode(pincode)) {
       return `The pincode "${pincode}" doesn't look right — please ask for a valid 6-digit Indian PIN code.`
     }
 
@@ -194,26 +192,32 @@ export const createDraftOrderTool: AiTool = {
     const apiKey = process.env.VANAMATI_ORDER_STATUS_KEY || ''
 
     try {
+      // Address is only included when the model provided a complete
+      // one; a bare product+variant draft is valid (customer fills
+      // address at Shopify checkout).
+      const payload: Record<string, unknown> = {
+        variant_id: resolvedVariantId,
+        quantity,
+        phone,
+      }
+      if (customerName) payload.customer_name = customerName
+      if (fullAddress) {
+        payload.address = {
+          line1: addressLine1,
+          line2: addressLine2 || null,
+          city,
+          state,
+          pincode,
+          country: 'India',
+        }
+      }
       const response = await fetch(`${baseUrl}/api/draft-orders/create`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
         },
-        body: JSON.stringify({
-          variant_id: resolvedVariantId,
-          quantity,
-          customer_name: customerName,
-          phone,
-          address: {
-            line1: addressLine1,
-            line2: addressLine2 || null,
-            city,
-            state,
-            pincode,
-            country: 'India',
-          },
-        }),
+        body: JSON.stringify(payload),
       })
       if (!response.ok) {
         const text = await response.text().catch(() => '')
