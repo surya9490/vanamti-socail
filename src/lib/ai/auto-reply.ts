@@ -175,45 +175,55 @@ export async function dispatchInboundToAiReply(
       }
     }
 
-    // Message-batch debounce — give the customer a moment to finish
-    // typing. Customers on WhatsApp routinely send "hi" then "i want
-    // honey" then "the 250ml one" as three separate messages within
-    // 10 seconds; replying to the FIRST one turns a natural close
-    // ("great, 250ml Forest Honey — ₹549, shall I set it up?") into
-    // three separate replies that all miss the actual question.
+    // Adaptive message-batch debounce.
     //
-    // Debounce: sleep BATCH_WAIT_SECONDS, then check whether a NEWER
-    // customer message arrived while we waited. If yes, this dispatch
-    // is superseded — a later dispatch (fired by that newer message)
-    // will handle the whole batch. Skip.
+    // Trigger condition: only when the customer's PREVIOUS message
+    // (recentInbounds[1], from the silence-gap query above) is
+    // within QUICK_TYPING_WINDOW_MS of the current one — a typing
+    // burst pattern where they're likely to send another fragment
+    // in the next few seconds. Isolated messages (long gap since
+    // the last customer message) get replied to immediately.
     //
-    // Trade-off: adds ~BATCH_WAIT_SECONDS latency to every reply. At
-    // 8 seconds this reads as "assistant is thinking" rather than
-    // "too slow"; well within human conversational tempo. The
-    // webhook's after() block keeps the serverless container alive
-    // for the wait.
-    const batchWaitSecondsRaw = Number(
-      process.env.AI_MESSAGE_BATCH_WAIT_SECONDS,
-    )
-    const batchWaitSeconds =
-      Number.isFinite(batchWaitSecondsRaw) && batchWaitSecondsRaw >= 0
-        ? batchWaitSecondsRaw
-        : 8
-    if (batchWaitSeconds > 0) {
-      const debounceStartedAt = new Date().toISOString()
-      await new Promise((r) => setTimeout(r, batchWaitSeconds * 1000))
-      const { data: newerInbound } = await db
-        .from('messages')
-        .select('id')
-        .eq('conversation_id', conversationId)
-        .eq('sender_type', 'customer')
-        .gt('created_at', debounceStartedAt)
-        .limit(1)
-      if (newerInbound && newerInbound.length > 0) {
-        console.log(
-          `[ai auto-reply] newer inbound arrived during ${batchWaitSeconds}s debounce on ${conversationId} — skipping this trigger`,
-        )
-        return
+    // When triggered, wait AI_MESSAGE_BATCH_WAIT_SECONDS then check
+    // for a newer customer message. If a newer one arrived → this
+    // dispatch is superseded, skip. If not → proceed to generate
+    // a reply that covers the whole batch.
+    //
+    // Prior behavior added an 8s wait to EVERY reply, which felt
+    // sluggish on straightforward back-and-forth exchanges (which
+    // are 70% of turns). The adaptive version pays that latency
+    // cost only when the pattern actually warrants it.
+    const QUICK_TYPING_WINDOW_MS = 15_000
+    const previousInbound = recentInbounds?.[1] // most recent BEFORE the current
+    const inTypingBurst =
+      previousInbound &&
+      Date.now() - new Date(previousInbound.created_at).getTime() <
+        QUICK_TYPING_WINDOW_MS
+
+    if (inTypingBurst) {
+      const batchWaitSecondsRaw = Number(
+        process.env.AI_MESSAGE_BATCH_WAIT_SECONDS,
+      )
+      const batchWaitSeconds =
+        Number.isFinite(batchWaitSecondsRaw) && batchWaitSecondsRaw >= 0
+          ? batchWaitSecondsRaw
+          : 6
+      if (batchWaitSeconds > 0) {
+        const debounceStartedAt = new Date().toISOString()
+        await new Promise((r) => setTimeout(r, batchWaitSeconds * 1000))
+        const { data: newerInbound } = await db
+          .from('messages')
+          .select('id')
+          .eq('conversation_id', conversationId)
+          .eq('sender_type', 'customer')
+          .gt('created_at', debounceStartedAt)
+          .limit(1)
+        if (newerInbound && newerInbound.length > 0) {
+          console.log(
+            `[ai auto-reply] newer inbound arrived during ${batchWaitSeconds}s debounce on ${conversationId} — skipping this trigger`,
+          )
+          return
+        }
       }
     }
 
