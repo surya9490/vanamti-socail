@@ -39,9 +39,15 @@ export async function GET(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const webhookSet = Boolean(
+  // Match the same lookup slack.ts uses — accept either spelling
+  // so a Railway setup with the typo isn't misdiagnosed as unset.
+  const canonicalSet = Boolean(
     process.env.SLACK_WHATSAPP_ALERT_TEAM_WEBHOOK_URL,
   )
+  const legacySet = Boolean(
+    process.env.SLACK_WHATTSAPP_ALERT_TEAM_WEBHOOK_URL,
+  )
+  const webhookSet = canonicalSet || legacySet
   const appUrlSet = Boolean(process.env.NEXT_PUBLIC_APP_URL)
 
   if (!webhookSet) {
@@ -73,6 +79,12 @@ export async function GET(request: Request): Promise<Response> {
 
   return NextResponse.json({
     slack_webhook_set: true,
+    slack_webhook_var:
+      canonicalSet && legacySet
+        ? 'both (canonical + legacy)'
+        : canonicalSet
+          ? 'SLACK_WHATSAPP_ALERT_TEAM_WEBHOOK_URL'
+          : 'SLACK_WHATTSAPP_ALERT_TEAM_WEBHOOK_URL (legacy spelling)',
     app_url_set: appUrlSet,
     posted: true,
     note: 'A test message was POSTed to the configured Slack webhook. If nothing arrived in Slack within ~10 seconds, check the deployment logs for `[slack notify]` lines — those record the failure reason (bad URL, revoked webhook, network).',

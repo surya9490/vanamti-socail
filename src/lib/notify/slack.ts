@@ -36,7 +36,13 @@ const SLACK_TIMEOUT_MS = 3000
  * Always resolves — errors are logged, never thrown.
  */
 export async function postSlackNotification(text: string): Promise<void> {
-  const webhookUrl = process.env.SLACK_WHATSAPP_ALERT_TEAM_WEBHOOK_URL
+  // Accept both spellings. The canonical name is
+// SLACK_WHATSAPP_ALERT_TEAM_WEBHOOK_URL, but early Railway configs
+// on this account set the typo'd form SLACK_WHATTSAPP_... (double
+// T). Reading both means neither spelling silently no-ops.
+const webhookUrl =
+  process.env.SLACK_WHATSAPP_ALERT_TEAM_WEBHOOK_URL ||
+  process.env.SLACK_WHATTSAPP_ALERT_TEAM_WEBHOOK_URL
   if (!webhookUrl) return
 
   const controller = new AbortController()
