@@ -14,6 +14,8 @@ import {
   postSlackNotification,
   buildHandoffSlackMessage,
 } from '@/lib/notify/slack'
+import { extractGrade, nextGrade, type LeadStage } from './grading'
+import { mirrorLeadStageToTag } from '@/lib/contacts/lead-tag'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -221,13 +223,25 @@ export async function dispatchInboundToAiReply(
       }
     }
 
-    const { text, handoff, usage } = await generateReply({
+    const generated = await generateReply({
       config,
       systemPrompt,
       messages,
       tools,
       toolContext,
     })
+    const { handoff, usage } = generated
+
+    // Extract the lead-grade tag emitted by the model at the END of
+    // its reply (per the grading rubric in defaults.ts) and strip
+    // it from the customer-facing text. On handoff turns the model
+    // is instructed to emit only the sentinel, so grade is null.
+    //
+    // Grade parsing happens BEFORE the handoff branch so a handoff
+    // reply that (against instructions) contains a grade tag still
+    // gets the tag stripped before whatever comes next; the DB
+    // update below is skipped when handoff=true.
+    const { grade, text } = extractGrade(generated.text)
 
     // Record token spend on the account's BYO key. Fire-and-forget so it
     // never adds latency to the customer-facing send: `logAiUsage`
@@ -345,6 +359,44 @@ export async function dispatchInboundToAiReply(
       text,
       aiGenerated: true,
     })
+
+    // Ratchet the contact's lead_stage and mirror to the tag
+    // system. Wrapped in try/catch and awaited (we're inside the
+    // webhook's after() block, so serverless container is kept
+    // alive) but a failure here must never affect the reply that
+    // just went out. If the model didn't emit a grade tag,
+    // `grade` is null and we skip.
+    if (grade) {
+      try {
+        const { data: contactRow } = await db
+          .from('contacts')
+          .select('lead_stage')
+          .eq('id', contactId)
+          .eq('account_id', accountId)
+          .maybeSingle()
+        const currentStage =
+          ((contactRow as { lead_stage?: string | null } | null)
+            ?.lead_stage as LeadStage | null) ?? null
+        const toWrite = nextGrade(currentStage, grade)
+        if (toWrite) {
+          const { error: updateErr } = await db
+            .from('contacts')
+            .update({
+              lead_stage: toWrite,
+              lead_stage_updated_at: new Date().toISOString(),
+            })
+            .eq('id', contactId)
+            .eq('account_id', accountId)
+          if (updateErr) {
+            console.warn('[ai auto-reply] lead_stage update failed:', updateErr)
+          } else {
+            await mirrorLeadStageToTag(db, accountId, contactId, toWrite)
+          }
+        }
+      } catch (err) {
+        console.warn('[ai auto-reply] grading step failed:', err)
+      }
+    }
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
   }

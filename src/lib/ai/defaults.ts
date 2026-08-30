@@ -140,7 +140,12 @@ export function buildSystemPrompt(args: {
         `  2. The topic is refunds, billing disputes, complaints about a specific person, legal claims, medical/safety issues, or account access problems.\n` +
         `  3. The customer is clearly angry, threatening, or using profanity directed at the business.\n` +
         `  4. After you've already asked a clarifying question in this conversation and the customer's follow-up is still ambiguous.\n\n` +
-        `Do NOT escalate merely because you don't know something — first try the knowledge base, and if it doesn't cover the question, briefly acknowledge what you don't have and offer what you do (relevant product/link/next step) WITHOUT offering to connect a human. Never invent facts; if you're unsure, say so plainly rather than guessing.`,
+        `Do NOT escalate merely because you don't know something — first try the knowledge base, and if it doesn't cover the question, briefly acknowledge what you don't have and offer what you do (relevant product/link/next step) WITHOUT offering to connect a human. Never invent facts; if you're unsure, say so plainly rather than guessing.\n\n` +
+        `Internal lead grading — at the very end of your reply, on a NEW LINE, output EXACTLY one grade tag: <GRADE>hot</GRADE>, <GRADE>warm</GRADE>, or <GRADE>cold</GRADE>. The tag is STRIPPED before the customer sees the message — it never appears in the WhatsApp send. Grading rubric:\n` +
+        `  * hot  — clear buying intent: named a specific product/variant, asked about price/stock/delivery-time for a specific item, asked how to order, gave an address, or explicitly said they want to buy.\n` +
+        `  * warm — engaged but exploring: asked general product questions ("what honeys do you have"), asked about the brand, asked about a policy that could support a purchase (returns, shipping), or a repeat customer casually chatting.\n` +
+        `  * cold — no buying signal: first-time "hi", off-topic chat, opt-out, an angry / complaint message, or a refund / support request.\n` +
+        `On handoff turns (when you emit ${HANDOFF_SENTINEL}) you skip the grade — the sentinel is the entire message.`,
     )
   }
 
