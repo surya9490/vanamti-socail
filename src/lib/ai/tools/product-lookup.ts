@@ -74,21 +74,45 @@ function formatRow(row: ProductRow): string {
   const variants = coerceVariants(row.variants)
   const url = row.product_url ? ` (${row.product_url})` : ''
 
-  // One-variant products stay on a single line — the variant is
-  // implicit and doesn't need to be shown to the model separately.
-  // Multi-variant products fan out so the model can pick correctly.
-  if (variants.length <= 1) {
+  // Signals that this product is multi-variant even when we don't
+  // have the variant array cached: a spread between price_min and
+  // price_max means there are AT LEAST two SKUs at different prices.
+  const priceRangeSuggestsMultiVariant =
+    row.price_min != null &&
+    row.price_max != null &&
+    row.price_min !== row.price_max
+
+  // Single variant on file (or none) but no price spread → simple
+  // one-price product; render on one line with inline variant id
+  // if we have it.
+  if (variants.length <= 1 && !priceRangeSuggestsMultiVariant) {
     const solo = variants[0]
-    const inlineVariantId =
-      solo ? ` [variant_id: ${solo.id}]` : ''
+    const inlineVariantId = solo ? ` [variant_id: ${solo.id}]` : ''
     return `• ${row.title}${formatPriceRange(row)}${url}${inlineVariantId}`
   }
 
-  const header = `• ${row.title}${url}`
-  const varLines = variants
-    .map((v) => formatVariantLine(v, row.currency))
-    .join('\n')
-  return `${header}\n${varLines}`
+  // Multi-variant with variant array populated → fan out per variant
+  // so the model can pick the right one.
+  if (variants.length > 1) {
+    const header = `• ${row.title}${url}`
+    const varLines = variants
+      .map((v) => formatVariantLine(v, row.currency))
+      .join('\n')
+    return `${header}\n${varLines}`
+  }
+
+  // Multi-variant per price range BUT variant array empty in cache.
+  // This happens when the product feed was populated before the
+  // Vanamati transformer started including variants — the operator
+  // needs to re-run backfill. Signal this to the model so it can
+  // fall back gracefully (share the product URL, ask customer to
+  // choose on the site) instead of trying to create a draft it
+  // has no variant data for.
+  return (
+    `• ${row.title}${formatPriceRange(row)}${url}` +
+    `\n    (variants not cached for this product — do NOT call create_draft_order; ` +
+    `share the product URL and ask the customer to pick their size on the website)`
+  )
 }
 
 export const productLookupTool: AiTool = {
