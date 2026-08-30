@@ -1,4 +1,5 @@
 import type { AiTool } from './registry'
+import type { ProductVariant } from '@/lib/products/types'
 
 // ============================================================
 // product_lookup tool — lets the AI answer product questions from
@@ -18,6 +19,12 @@ import type { AiTool } from './registry'
 // to appear in the AI's reply — the model then quotes/paraphrases
 // from that plain-text block rather than composing prices from
 // scratch, so it can't invent numbers.
+//
+// When a product has multiple variants (250ml / 500ml / 1kg) we
+// list them inline with their variant IDs so create_draft_order
+// can be called with the right one. The variant ID is model-facing
+// only — it never lands in a customer-facing message unless the
+// model puts it there (which the prompt forbids).
 // ============================================================
 
 const MAX_RESULTS = 5
@@ -28,21 +35,60 @@ interface ProductRow {
   price_max: number | null
   currency: string | null
   product_url: string | null
+  variants: unknown
 }
 
-function formatPrice(row: ProductRow): string {
-  const symbol = row.currency === 'INR' ? '₹' : (row.currency || '')
+function currencySymbol(currency: string | null): string {
+  return currency === 'INR' ? '₹' : currency || ''
+}
+
+function formatPriceRange(row: ProductRow): string {
+  const symbol = currencySymbol(row.currency)
   if (row.price_min == null && row.price_max == null) return ''
-  if (row.price_min != null && row.price_max != null && row.price_min !== row.price_max) {
+  if (
+    row.price_min != null &&
+    row.price_max != null &&
+    row.price_min !== row.price_max
+  ) {
     return ` — ${symbol}${row.price_min}–${symbol}${row.price_max}`
   }
   const p = row.price_min ?? row.price_max
   return ` — ${symbol}${p}`
 }
 
+function coerceVariants(raw: unknown): ProductVariant[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (v): v is ProductVariant =>
+      !!v && typeof v === 'object' && typeof (v as { id?: unknown }).id === 'string',
+  )
+}
+
+function formatVariantLine(v: ProductVariant, currency: string | null): string {
+  const label = v.title ?? 'default'
+  const price = v.price != null ? ` — ${currencySymbol(currency)}${v.price}` : ''
+  return `    - ${label}${price} [variant_id: ${v.id}]`
+}
+
 function formatRow(row: ProductRow): string {
+  const variants = coerceVariants(row.variants)
   const url = row.product_url ? ` (${row.product_url})` : ''
-  return `• ${row.title}${formatPrice(row)}${url}`
+
+  // One-variant products stay on a single line — the variant is
+  // implicit and doesn't need to be shown to the model separately.
+  // Multi-variant products fan out so the model can pick correctly.
+  if (variants.length <= 1) {
+    const solo = variants[0]
+    const inlineVariantId =
+      solo ? ` [variant_id: ${solo.id}]` : ''
+    return `• ${row.title}${formatPriceRange(row)}${url}${inlineVariantId}`
+  }
+
+  const header = `• ${row.title}${url}`
+  const varLines = variants
+    .map((v) => formatVariantLine(v, row.currency))
+    .join('\n')
+  return `${header}\n${varLines}`
 }
 
 export const productLookupTool: AiTool = {
@@ -51,7 +97,8 @@ export const productLookupTool: AiTool = {
   description:
     'Look up products from the live store catalogue. Call this whenever the customer asks about products, prices, or "what do you sell". ' +
     'Pass a search term if the customer mentioned one (e.g. "honey", "gift box"); omit the query to get a small selection of active products for a generic greeting. ' +
-    'Returns up to 5 products with prices — quote these verbatim rather than inventing numbers.',
+    'Returns up to 5 products with prices and (for multi-variant products) each variant with its variant_id. ' +
+    'Quote titles + prices verbatim rather than inventing numbers. Never show variant_id values to the customer — they are for calling create_draft_order.',
   parameters: {
     type: 'OBJECT',
     properties: {
@@ -68,7 +115,7 @@ export const productLookupTool: AiTool = {
 
     let query = ctx.db
       .from('products')
-      .select('title, price_min, price_max, currency, product_url')
+      .select('title, price_min, price_max, currency, product_url, variants')
       .eq('account_id', ctx.accountId)
       .eq('is_active', true)
       .limit(MAX_RESULTS)

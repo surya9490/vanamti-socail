@@ -35,6 +35,7 @@ export async function upsertProduct(
     // state; the Vanamati transformer sets false only when the product
     // is drafted / archived.
     is_active: input.is_active ?? true,
+    variants: input.variants ?? [],
     synced_at: new Date().toISOString(),
   }
   const { error } = await db
@@ -90,6 +91,7 @@ export async function upsertProductsBulk(
     tags: input.tags ?? [],
     product_type: input.product_type ?? null,
     is_active: input.is_active ?? true,
+    variants: input.variants ?? [],
     synced_at: now,
   }))
   const { error } = await db

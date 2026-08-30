@@ -5,6 +5,22 @@
 // ============================================================
 
 /**
+ * A single variant of a product. The `id` is Shopify's variantId in
+ * the shape create_draft_order needs to pass back for the
+ * draftOrderCreate mutation — either a bare numeric ("12345") or a
+ * GID ("gid://shopify/ProductVariant/12345"), whichever Vanamati
+ * sent. `is_available` mirrors Shopify's inventory availability but
+ * per operator preference is not gated on for chat sales.
+ */
+export interface ProductVariant {
+  id: string
+  title: string | null
+  price: number | null
+  sku: string | null
+  is_available: boolean
+}
+
+/**
  * A single product as stored in the WACRM cache. Mirrors what the
  * Vanamati Shopify app sends via webhook, minus columns that only
  * matter server-side (created_at, account_id).
@@ -23,6 +39,7 @@ export interface Product {
   tags: string[]
   productType: string | null
   isActive: boolean
+  variants: ProductVariant[]
   syncedAt: string
 }
 
@@ -51,6 +68,7 @@ export interface ProductWebhookPayload {
     tags?: string[] | null
     product_type?: string | null
     is_active?: boolean | null
+    variants?: ProductVariant[] | null
   }
 }
 
