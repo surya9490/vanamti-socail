@@ -73,14 +73,36 @@ vi.mock('./admin-client', () => ({
         }
         return chain
       }
-      // conversations
-      return {
-        select: () => ({
-          eq: () => ({
-            maybeSingle: () =>
-              Promise.resolve({ data: h.state.conv, error: null }),
+      // conversations + contacts fallthrough — the auto-reply path
+      // reads both with chained .eq() (one or two levels). A recursive
+      // eq() that returns the same builder keeps the mock forgiving
+      // regardless of how many filters the caller stacks.
+      // Data returned by .maybeSingle() depends on the table:
+      //   contacts       → contactRow (has `name` for the prompt +
+      //                    `phone` for the tool context)
+      //   conversations  → conv
+      // Table selector persists via a closed-over variable so calls
+      // like `.from('contacts').select().eq().eq().maybeSingle()`
+      // resolve to the contact row, not the conversation row.
+      const isContacts = table === 'contacts'
+      type Builder = {
+        select: () => Builder
+        eq: () => Builder
+        maybeSingle: () => Promise<{ data: unknown; error: null }>
+      }
+      const builder: Builder = {
+        select: () => builder,
+        eq: () => builder,
+        maybeSingle: () =>
+          Promise.resolve({
+            data: isContacts
+              ? { name: 'Test Contact', phone: '+919490790257' }
+              : h.state.conv,
+            error: null,
           }),
-        }),
+      }
+      return {
+        ...builder,
         update: (payload: Record<string, unknown>) => {
           h.state.updatePayload = payload
           return { eq: () => Promise.resolve({ error: null }) }

@@ -251,12 +251,25 @@ export async function dispatchInboundToAiReply(
       latestUserMessage(messages),
     )
 
+    // Pull the contact's name (if we have it) for light prompt
+    // personalisation. Same query pattern used later for the tool
+    // context / handoff notification — cheap; ~one indexed read.
+    const { data: contactRowForPrompt } = await db
+      .from('contacts')
+      .select('name')
+      .eq('id', contactId)
+      .eq('account_id', accountId)
+      .maybeSingle()
+    const contactName =
+      (contactRowForPrompt as { name?: string | null } | null)?.name ?? null
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
       defaultLanguage: config.defaultLanguage,
       silenceGapDays,
+      customerName: contactName,
     })
 
     // Function-calling tools the account has switched on (e.g. order
