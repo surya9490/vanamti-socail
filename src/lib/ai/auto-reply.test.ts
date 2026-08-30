@@ -256,16 +256,18 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('skips when the per-conversation cooldown is active', async () => {
-    // Simulate a recent AI reply within the cooldown window. The
-    // exact created_at doesn't matter here — the code just checks
-    // whether the mocked query returned any rows.
+  it('replies even when we just replied recently (post-reply cooldown removed)', async () => {
+    // Prior behavior: a 30s cooldown after every AI reply skipped
+    // any inbound that landed inside the window. That blocked
+    // legitimate quick follow-ups (customer answering our question).
+    // Burst protection is now the batch-debounce; the cooldown is
+    // gone. A recent AI message in the transcript no longer blocks
+    // a fresh reply.
     h.state.recentAiMessages = [
       { id: 'msg-recent', created_at: new Date().toISOString() },
     ]
     await dispatchInboundToAiReply(ARGS)
-    expect(h.generateReply).not.toHaveBeenCalled()
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalled()
   })
 
   it('skips when there is nothing to reply to', async () => {
