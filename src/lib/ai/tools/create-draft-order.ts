@@ -197,25 +197,41 @@ export const createDraftOrderTool: AiTool = {
       product = data as typeof product
     }
 
-    // Fallback: shop_product_id absent OR didn't match a row → try
-    // to find the parent product by variant_id via a JSONB contains
-    // query.
+    // Fallback: shop_product_id absent OR didn't match a row → find
+    // the parent product by variant_id via a JS scan of the active
+    // catalogue.
+    //
+    // Prior implementation used .contains('variants', [{id:X}]) —
+    // supabase-js's JSONB-array-of-object query pattern proved
+    // finicky and returned errors we couldn't see. At Vanamati's
+    // scale (~16 active products) the linear scan is O(N) with
+    // trivial cost; graduate to a proper JSONB query only if the
+    // catalogue grows past a few hundred rows.
     if (!product && variantId) {
-      const { data, error: byVariantErr } = await ctx.db
+      const { data: allProducts, error: scanErr } = await ctx.db
         .from('products')
         .select('shop_product_id, variants, title, is_active')
         .eq('account_id', ctx.accountId)
-        .contains('variants', [{ id: variantId }])
-        .limit(1)
-        .maybeSingle()
-      if (byVariantErr) {
+        .eq('is_active', true)
+      if (scanErr) {
         console.warn(
-          '[create_draft_order] product-by-variant lookup failed:',
-          byVariantErr,
+          '[create_draft_order] active-catalogue scan failed:',
+          scanErr,
         )
         return UNAVAILABLE
       }
-      product = data as typeof product
+      const found = (allProducts as Array<{
+        shop_product_id?: string
+        variants?: unknown
+        title?: string
+        is_active?: boolean
+      }> | null)?.find((p) => {
+        if (!Array.isArray(p.variants)) return false
+        return (p.variants as Array<{ id?: string }>).some(
+          (v) => v.id === variantId,
+        )
+      })
+      product = (found as typeof product) ?? null
     }
 
     if (!product) {
