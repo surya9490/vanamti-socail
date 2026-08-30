@@ -39,6 +39,24 @@ function looksLikeIndianPincode(pincode: string): boolean {
   return /^\d{6}$/.test(pincode)
 }
 
+/**
+ * Normalise a variant title for fuzzy comparison. Strips whitespace,
+ * lowercases, and canonicalises common Indian-market volume aliases:
+ * "1l" / "1litr" / "1 litre" → "1000ml"; "2l" → "2000ml". Enough
+ * tolerance for how customers actually name sizes ("1litrr", "1 L",
+ * "1 liter", "1lt"), plus how the model might paraphrase them.
+ */
+function normalizeVariantTitle(t: string): string {
+  let s = t.toLowerCase().trim().replace(/\s+/g, '')
+  // Common shorthand → grams / ml canonical form.
+  s = s.replace(/(\d+)\s*litr(e|es|es|s|r|rs)?\b/g, (_m, n) => `${Number(n) * 1000}ml`)
+  s = s.replace(/(\d+)\s*l\b/g, (_m, n) => `${Number(n) * 1000}ml`)
+  s = s.replace(/(\d+)\s*ltr\b/g, (_m, n) => `${Number(n) * 1000}ml`)
+  s = s.replace(/(\d+)\s*lt\b/g, (_m, n) => `${Number(n) * 1000}ml`)
+  s = s.replace(/(\d+)\s*kg\b/g, (_m, n) => `${Number(n) * 1000}g`)
+  return s
+}
+
 export const createDraftOrderTool: AiTool = {
   name: 'create_draft_order',
   label: 'Create draft order',
@@ -59,7 +77,12 @@ export const createDraftOrderTool: AiTool = {
       variant_id: {
         type: 'STRING',
         description:
-          'The specific variant id from product_lookup (numeric string). Required when the product has multiple variants; omit for single-variant products.',
+          'The specific variant id from product_lookup (numeric string). Preferred when you have it. Required when the product has multiple variants unless you pass variant_title instead.',
+      },
+      variant_title: {
+        type: 'STRING',
+        description:
+          "The variant's human-friendly title as the customer named it (e.g. '250ml', '500ml', '1000ml', '1L'). Use this when you know which variant the customer picked but don't have the variant_id handy — the tool will match by title against the product's variants. Case-insensitive; '1L' matches '1000ml' etc. Ignored when variant_id is passed.",
       },
       quantity: {
         type: 'INTEGER',
@@ -110,6 +133,8 @@ export const createDraftOrderTool: AiTool = {
       typeof args.shop_product_id === 'string' ? args.shop_product_id.trim() : ''
     const variantId =
       typeof args.variant_id === 'string' ? args.variant_id.trim() : ''
+    const variantTitle =
+      typeof args.variant_title === 'string' ? args.variant_title.trim() : ''
     const quantityRaw = args.quantity
     const quantity =
       typeof quantityRaw === 'number' && quantityRaw > 0
@@ -174,17 +199,44 @@ export const createDraftOrderTool: AiTool = {
       if (variants.length === 0) {
         return `Product ${shopProductId} has no variant on file — try refreshing the catalogue backfill.`
       }
-      if (variants.length > 1) {
-        return `Product "${(product as { title?: string }).title ?? shopProductId}" has multiple variants — call product_lookup to see them and pass the specific variant_id.`
+      if (variants.length === 1) {
+        const only = variants[0]
+        if (!only?.id) return UNAVAILABLE
+        resolvedVariantId = only.id
+      } else if (variantTitle) {
+        // Multi-variant product + model gave us a title hint. Match
+        // by fuzzy title (case-insensitive substring, both ways).
+        // Handles "1L" → "1000ml", "250" → "250ml", "500 ml" →
+        // "500ml", etc. — enough tolerance for how customers and
+        // models actually write sizes.
+        const wanted = normalizeVariantTitle(variantTitle)
+        const matches = variants.filter((v) => {
+          if (!v.title) return false
+          const t = normalizeVariantTitle(v.title)
+          return t === wanted || t.includes(wanted) || wanted.includes(t)
+        })
+        if (matches.length === 1 && matches[0].id) {
+          resolvedVariantId = matches[0].id
+        } else if (matches.length > 1) {
+          // Ambiguous — pass a clear next-step for the MODEL. Never
+          // shown to the customer; the model should list variants
+          // to the customer and let them clarify.
+          return `Variant title "${variantTitle}" matched multiple variants on ${shopProductId}. Ask the customer which specific size they want, then re-call with the exact variant_title or variant_id.`
+        } else {
+          // No fuzzy match — same treatment as no-variant-id.
+          return `Couldn't match variant "${variantTitle}" on product ${shopProductId}. Call product_lookup for this product to see the exact variant titles, decide which one the customer wants, and re-call create_draft_order with variant_id or variant_title.`
+        }
+      } else {
+        // Multi-variant + no title hint from the model. Tell the
+        // model to look them up — this branch is a coding-side
+        // hint for the model, never surfaced verbatim.
+        return `Product ${shopProductId} has multiple variants. Call product_lookup for this product, decide the variant matching the customer's stated size/option, then re-call create_draft_order with variant_id or variant_title.`
       }
-      const only = variants[0]
-      if (!only?.id) return UNAVAILABLE
-      resolvedVariantId = only.id
     } else {
       // Verify the model-supplied variant belongs to this product.
       const match = variants.find((v) => v.id === resolvedVariantId)
       if (!match) {
-        return `Variant ${resolvedVariantId} isn't on product ${shopProductId}.`
+        return `Variant ${resolvedVariantId} isn't on product ${shopProductId}. Call product_lookup to get current variant ids for this product and re-call with the correct one.`
       }
     }
 
