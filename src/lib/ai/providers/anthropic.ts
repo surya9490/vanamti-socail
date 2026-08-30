@@ -300,6 +300,35 @@ export async function generateAnthropicWithTools(
     if (data.stop_reason !== 'tool_use' || toolCalls.length === 0) {
       const text = extractText(data)
       if (text) return { text, usage }
+
+      // stop_reason='max_tokens' with no text means we truncated
+      // mid-tool-call — the model was writing a tool_use block and
+      // ran out of output budget before producing any assistant text.
+      // Rather than hard-failing (empty_response) and dropping the
+      // whole reply, retry ONCE with a bumped-up budget so at least
+      // the customer gets something. This should be rare (default
+      // MAX_OUTPUT_TOKENS is comfortable); when it hits it's usually
+      // the operator having lowered the cap too aggressively.
+      if (data.stop_reason === 'max_tokens') {
+        console.warn(
+          '[ai anthropic] max_tokens hit mid-tool-call — retrying with 2x budget',
+        )
+        const retry = await postAnthropic(
+          apiKey,
+          {
+            model,
+            system: cachedSystemBlock(systemPrompt),
+            max_tokens: MAX_OUTPUT_TOKENS * 2,
+            tools: anthropicTools,
+            messages: conversation,
+          },
+          timeoutMs,
+        )
+        usage = addUsage(usage, usageFrom(retry))
+        const retryText = extractText(retry)
+        if (retryText) return { text: retryText, usage }
+      }
+
       // Rare: end_turn with no text (all blocks were empty). Bail so we
       // don't spin the loop; parseGeneration would drop an empty string.
       break

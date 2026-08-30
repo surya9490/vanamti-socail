@@ -23,12 +23,18 @@ export const AI_PROVIDER_DEFAULT_MODEL: Record<AiProvider, string> = {
  */
 export const HANDOFF_SENTINEL = '[[HANDOFF]]'
 
-/** Cap on generated reply length — keeps WhatsApp replies short and
- *  bounds token spend on the caller's own key. Dropped from 1024 to
- *  400 (~1600 chars) because WhatsApp replies are ideally <500 chars,
- *  and any run-away generation past that is either the model repeating
- *  itself or dumping a catalogue — both cases we'd rather truncate. */
-export const MAX_OUTPUT_TOKENS = 400
+/** Cap on generated reply length — WhatsApp replies are ideally
+ *  <500 chars, but this cap covers the model's FULL output blob for
+ *  a turn (including tool-use orchestration, reasoning preamble, and
+ *  the final text). Tool-use turns routinely spend 200-400 tokens on
+ *  the tool_use call itself before the final text answer — a 400
+ *  cap truncated those mid-call, producing empty-response failures
+ *  ("Anthropic did not return an answer after tool calls").
+ *
+ *  800 keeps the guard-rail on runaway generation while giving Sonnet
+ *  headroom to think + call 1-2 tools + write a normal WhatsApp reply.
+ *  Prompt still tells the model to keep replies short. */
+export const MAX_OUTPUT_TOKENS = 800
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 const DEFAULT_CONTEXT_MESSAGE_LIMIT = 20
