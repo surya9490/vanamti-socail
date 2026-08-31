@@ -260,14 +260,30 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     // Prior behavior: a 30s cooldown after every AI reply skipped
     // any inbound that landed inside the window. That blocked
     // legitimate quick follow-ups (customer answering our question).
-    // Burst protection is now the batch-debounce; the cooldown is
-    // gone. A recent AI message in the transcript no longer blocks
-    // a fresh reply.
-    h.state.recentAiMessages = [
-      { id: 'msg-recent', created_at: new Date().toISOString() },
-    ]
+    // Burst protection is now the batch-debounce + post-generation
+    // race check; the cooldown is gone. A recent AI message in the
+    // transcript no longer blocks a fresh reply.
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).toHaveBeenCalled()
+  })
+
+  it('skips when a newer customer inbound arrived while generating', async () => {
+    // Post-generation race check. Two dispatches for two rapid
+    // customer messages: the first one, having already finished
+    // generation, should NOT send if the mock now shows a newer
+    // customer inbound (i.e. the second dispatch will produce a
+    // fuller reply). Prevents double-messaging.
+    //
+    // The mock's non-ordered messages query returns recentAiMessages
+    // — that's how the post-gen check receives its "newer inbound"
+    // signal in tests (schema-wise it's customer messages; the mock
+    // just repurposes the same field).
+    h.state.recentAiMessages = [
+      { id: 'newer-customer-msg', created_at: new Date().toISOString() },
+    ]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalled() // generation still ran
+    expect(h.engineSendText).not.toHaveBeenCalled() // but send was skipped
   })
 
   it('skips when there is nothing to reply to', async () => {

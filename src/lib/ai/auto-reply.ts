@@ -53,6 +53,11 @@ export async function dispatchInboundToAiReply(
 ): Promise<void> {
   const { accountId, conversationId, contactId, configOwnerUserId } = args
   const trace_id = newTraceId('ar')
+  // Captured for the post-generation race check further down. Any
+  // customer inbound with created_at > this value while we were
+  // generating means a newer dispatch is running/queued — this one
+  // should abandon its reply so we don't double-message.
+  const dispatchStartedAt = new Date().toISOString()
 
   try {
     log.info('auto_reply.dispatched', {
@@ -452,6 +457,35 @@ export async function dispatchInboundToAiReply(
       } catch (err) {
         console.warn('[ai auto-reply] slack handoff notify failed:', err)
       }
+      return
+    }
+
+    // Race check — abandon this reply if a NEWER customer message
+    // arrived while we were generating. Handles the case where two
+    // customer messages land within a few seconds and both trigger
+    // their own dispatch: dispatch 1 finishes generating a reply,
+    // but dispatch 2 (which saw dispatch 1's inbound as "recent")
+    // is about to produce a fuller reply that includes both
+    // messages. Skipping here means the customer gets ONE reply
+    // instead of two near-duplicates.
+    //
+    // Applies to both first-message dispatches (where the pre-
+    // generation debounce is intentionally skipped for latency)
+    // and typing-burst dispatches (where the newer inbound arrived
+    // after the debounce sleep completed).
+    const { data: newerInboundAfterGen } = await db
+      .from('messages')
+      .select('id')
+      .eq('conversation_id', conversationId)
+      .eq('sender_type', 'customer')
+      .gt('created_at', dispatchStartedAt)
+      .limit(1)
+    if (newerInboundAfterGen && newerInboundAfterGen.length > 0) {
+      log.info('auto_reply.skipped', {
+        trace_id,
+        reason: 'superseded_after_generation',
+        conversation_id: conversationId,
+      })
       return
     }
 
