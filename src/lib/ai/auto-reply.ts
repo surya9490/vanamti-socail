@@ -203,11 +203,17 @@ export async function dispatchInboundToAiReply(
       if (batchWaitSeconds > 0) {
         const debounceStartedAt = new Date().toISOString()
         await new Promise((r) => setTimeout(r, batchWaitSeconds * 1000))
+        // Only TEXT supersedes text — a voice note / image / doc
+        // arriving during the wait doesn't trigger its own AI
+        // reply (the AI is text-only), so it shouldn't cancel this
+        // dispatch. Otherwise the customer sends "hello" then a
+        // voice note and gets zero replies.
         const { data: newerInbound } = await db
           .from('messages')
           .select('id')
           .eq('conversation_id', conversationId)
           .eq('sender_type', 'customer')
+          .eq('content_type', 'text')
           .gt('created_at', debounceStartedAt)
           .limit(1)
         if (newerInbound && newerInbound.length > 0) {
@@ -473,11 +479,16 @@ export async function dispatchInboundToAiReply(
     // generation debounce is intentionally skipped for latency)
     // and typing-burst dispatches (where the newer inbound arrived
     // after the debounce sleep completed).
+    // Only TEXT counts as a supersede (see the pre-gen debounce
+     // for rationale). A voice note landing mid-generation must
+     // NOT cancel a text reply — the AI is text-only so the voice
+     // wouldn't have triggered its own reply either.
     const { data: newerInboundAfterGen } = await db
       .from('messages')
       .select('id')
       .eq('conversation_id', conversationId)
       .eq('sender_type', 'customer')
+      .eq('content_type', 'text')
       .gt('created_at', dispatchStartedAt)
       .limit(1)
     if (newerInboundAfterGen && newerInboundAfterGen.length > 0) {
