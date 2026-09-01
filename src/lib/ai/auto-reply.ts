@@ -90,12 +90,55 @@ export async function dispatchInboundToAiReply(
 
     const { data: conv, error: convErr } = await db
       .from('conversations')
-      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count')
+      .select(
+        'assigned_agent_id, ai_autoreply_disabled, ai_autoreply_disabled_at, ai_reply_count',
+      )
       .eq('id', conversationId)
       .maybeSingle()
     if (convErr || !conv) return
     if (conv.assigned_agent_id) return // a human owns this thread
-    if (conv.ai_autoreply_disabled) return // handed off / turned off here
+
+    if (conv.ai_autoreply_disabled) {
+      // Auto-resume after a long idle window. If the AI was paused
+      // >AUTO_RESUME_HOURS ago (default 24) and a new inbound
+      // arrives, the customer is likely on a fresh topic; the AI
+      // should try to help rather than sit silent until an agent
+      // notices. NULL disabled_at means we don't know when it was
+      // paused — treat as "long enough ago" and resume, matching
+      // operator preference for stale handoffs.
+      const AUTO_RESUME_HOURS = 24
+      const disabledAt = (conv as { ai_autoreply_disabled_at?: string | null })
+        .ai_autoreply_disabled_at
+      // NULL disabled_at = pre-migration handoff of unknown age.
+      // Treat as "still paused" (safer default) — a human paused
+      // this at some point and we don't know when, so don't
+      // silently override that decision. Only pauses with a
+      // known timestamp get the 24h auto-resume.
+      if (!disabledAt) return
+
+      const disabledMsAgo = Date.now() - new Date(disabledAt).getTime()
+      const isStalePause = disabledMsAgo > AUTO_RESUME_HOURS * 60 * 60 * 1000
+
+      if (!isStalePause) {
+        return // still inside the pause window
+      }
+
+      // Auto-resume: clear the paused flag + summary so we start
+      // fresh, then continue with the dispatch below.
+      await db
+        .from('conversations')
+        .update({
+          ai_autoreply_disabled: false,
+          ai_autoreply_disabled_at: null,
+          ai_handoff_summary: null,
+        })
+        .eq('id', conversationId)
+      log.info('auto_reply.auto_resumed', {
+        trace_id,
+        conversation_id: conversationId,
+        disabled_hours_ago: Math.round(disabledMsAgo / (60 * 60 * 1000)),
+      })
+    }
     // Per-conversation reply cap removed per operator request: sales
     // conversations routinely need 5–10 turns to close (greet →
     // pick → confirm → address → link → follow-ups), and a hard
@@ -402,6 +445,7 @@ export async function dispatchInboundToAiReply(
       })
       const update: Record<string, unknown> = {
         ai_autoreply_disabled: true,
+        ai_autoreply_disabled_at: new Date().toISOString(),
         ai_handoff_summary: summary,
       }
       // Only set the assignee when a target is configured AND the thread

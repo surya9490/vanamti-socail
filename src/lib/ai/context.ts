@@ -32,10 +32,34 @@ export async function buildConversationContext(
   if (error) throw error
 
   const rows = ((data ?? []) as DbMessage[]).reverse()
-  return rows
+  const chat = rows
     .filter((m) => m.content_text && m.content_text.trim())
     .map((m) => ({
-      role: m.sender_type === 'customer' ? 'user' : 'assistant',
+      role: (m.sender_type === 'customer' ? 'user' : 'assistant') as
+        | 'user'
+        | 'assistant',
       content: m.content_text!.trim(),
     }))
+
+  // Collapse consecutive identical CUSTOMER turns. When auto-reply
+  // is paused (handoff), silent handoffs leave no assistant turn
+  // between repeated customer sends of the same question. The model
+  // then sees "user: X / user: X / user: X" and reads it as
+  // escalation ("customer needs a human, they've asked 3 times") —
+  // which then loops into another handoff on resume. Deduping
+  // gives the model the clean "user: X" it should have seen if the
+  // AI had responded normally the first time.
+  //
+  // Only collapses IDENTICAL consecutive USER turns; different
+  // messages (even just wording variations) stay in the transcript
+  // untouched — those carry real conversational signal.
+  const collapsed: ChatMessage[] = []
+  for (const m of chat) {
+    const prev = collapsed[collapsed.length - 1]
+    if (prev && prev.role === 'user' && m.role === 'user' && prev.content === m.content) {
+      continue
+    }
+    collapsed.push(m)
+  }
+  return collapsed
 }

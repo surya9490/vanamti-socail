@@ -246,10 +246,36 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('skips when auto-reply was disabled on this conversation', async () => {
+  it('skips when auto-reply was disabled on this conversation (fresh pause)', async () => {
     h.state.conv = {
       assigned_agent_id: null,
       ai_autoreply_disabled: true,
+      ai_autoreply_disabled_at: new Date().toISOString(), // just now
+      ai_reply_count: 0,
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('auto-resumes and replies when auto-reply was paused >24h ago', async () => {
+    const oldPause = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString()
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: true,
+      ai_autoreply_disabled_at: oldPause,
+      ai_reply_count: 0,
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalled()
+  })
+
+  it('does NOT auto-resume when the disabled_at timestamp is missing', async () => {
+    // NULL disabled_at = pre-migration or human-manual pause of
+    // unknown age. Safer to keep paused and let a human resume it.
+    h.state.conv = {
+      assigned_agent_id: null,
+      ai_autoreply_disabled: true,
+      ai_autoreply_disabled_at: null,
       ai_reply_count: 0,
     }
     await dispatchInboundToAiReply(ARGS)
