@@ -2,6 +2,8 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
+import { engineSendCarouselTemplate } from '@/lib/flows/meta-send'
+import { buildProductCarouselCards } from '@/lib/products/carousel-cards'
 
 // ============================================================
 // GET /api/cron/re-engagement
@@ -40,6 +42,14 @@ import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 //   RE_ENGAGEMENT_MAX_AGE_HOURS          default 168 (7 days)
 //   RE_ENGAGEMENT_TEMPLATE_LANG          default 'en'
 //   RE_ENGAGEMENT_BATCH_SIZE             default 100
+//   RE_ENGAGEMENT_STAGE_1_TYPE           'text' (default) | 'carousel'
+//   RE_ENGAGEMENT_STAGE_2_TYPE           'text' (default) | 'carousel'
+//
+// Carousel stages reuse the same Meta MARKETING carousel template
+// the AI's send_product_carousel tool uses (per-card {{1}} = title,
+// {{2}} = price; URL button {{1}} = handle; body {{1}} = "there").
+// The cron builds cards from the account's product cache — same
+// helper as the tool, so what customers see is identical.
 //
 // Missing BOTH stage template envs → 503 (feature off entirely).
 // Missing ONE → that stage skipped, the other still runs.
@@ -72,13 +82,19 @@ interface ContactRow {
 }
 
 type StageKey = 'stage_1' | 'stage_2'
+type StageType = 'text' | 'carousel'
 
 interface StageConfig {
   key: StageKey
   templateName: string
+  templateType: StageType
   hoursMin: number
   hoursMax: number
   timestampColumn: 're_engagement_stage_1_at' | 're_engagement_stage_2_at'
+}
+
+function parseStageType(raw: string | undefined): StageType {
+  return raw?.toLowerCase() === 'carousel' ? 'carousel' : 'text'
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -110,6 +126,7 @@ export async function GET(request: Request): Promise<Response> {
     stages.push({
       key: 'stage_1',
       templateName: stage1Template,
+      templateType: parseStageType(process.env.RE_ENGAGEMENT_STAGE_1_TYPE),
       hoursMin: stage1Hours,
       hoursMax: stage2Template ? stage2Hours : maxAgeHours,
       timestampColumn: 're_engagement_stage_1_at',
@@ -119,6 +136,7 @@ export async function GET(request: Request): Promise<Response> {
     stages.push({
       key: 'stage_2',
       templateName: stage2Template,
+      templateType: parseStageType(process.env.RE_ENGAGEMENT_STAGE_2_TYPE),
       hoursMin: stage2Hours,
       hoursMax: maxAgeHours,
       timestampColumn: 're_engagement_stage_2_at',
@@ -208,13 +226,35 @@ export async function GET(request: Request): Promise<Response> {
 
       attempted.push({ contact_id: contactId, stage: stage.key })
       try {
-        await sendMessageToConversation(db, accountId, {
-          conversationId,
-          messageType: 'template',
-          templateName: stage.templateName,
-          templateLanguage: templateLang,
-          templateParams: [],
-        })
+        if (stage.templateType === 'carousel') {
+          const cards = await buildProductCarouselCards(db, accountId)
+          if (cards.length < 2) {
+            // Not enough eligible products to fill a carousel —
+            // fail this contact for this run rather than sending a
+            // malformed template. Don't stamp the timestamp so it
+            // gets retried on the next run once inventory allows.
+            throw new Error('carousel needs ≥2 products with images; none found')
+          }
+          await engineSendCarouselTemplate({
+            accountId,
+            userId: '',
+            conversationId,
+            contactId,
+            templateName: stage.templateName,
+            language: templateLang,
+            bodyParams: ['there'],
+            cards,
+            summaryText: `Re-engagement carousel (${stage.key}): ${cards.length} products`,
+          })
+        } else {
+          await sendMessageToConversation(db, accountId, {
+            conversationId,
+            messageType: 'template',
+            templateName: stage.templateName,
+            templateLanguage: templateLang,
+            templateParams: [],
+          })
+        }
         await db
           .from('contacts')
           .update({ [stage.timestampColumn]: nowIso })
@@ -241,6 +281,7 @@ export async function GET(request: Request): Promise<Response> {
     stages: stages.map((s) => ({
       key: s.key,
       template: s.templateName,
+      type: s.templateType,
       window_hours: [s.hoursMin, s.hoursMax],
     })),
   })

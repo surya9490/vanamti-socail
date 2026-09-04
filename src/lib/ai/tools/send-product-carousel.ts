@@ -1,6 +1,6 @@
 import type { AiTool } from './registry'
 import { engineSendCarouselTemplate } from '@/lib/flows/meta-send'
-import type { ProductVariant } from '@/lib/products/types'
+import { buildProductCarouselCards } from '@/lib/products/carousel-cards'
 
 // ============================================================
 // send_product_carousel tool — sends a Meta MARKETING Carousel
@@ -57,15 +57,6 @@ function carouselConfigured(): boolean {
   return Boolean(process.env.WHATSAPP_CAROUSEL_TEMPLATE_NAME)
 }
 
-interface ProductRow {
-  shop_product_id: string
-  handle: string | null
-  title: string
-  price_min: number | null
-  image_url: string | null
-  variants?: ProductVariant[] | null
-}
-
 export const sendProductCarouselTool: AiTool = {
   name: 'send_product_carousel',
   label: 'Send product carousel (Marketing template)',
@@ -96,33 +87,9 @@ export const sendProductCarouselTool: AiTool = {
         ? args.customer_first_name.trim()
         : 'there'
 
-    // Pull active products with images. Carousel cards MUST have
-    // an image URL, so we skip any product missing one.
-    const { data, error } = await ctx.db
-      .from('products')
-      .select('shop_product_id, handle, title, price_min, image_url, variants')
-      .eq('account_id', ctx.accountId)
-      .eq('is_active', true)
-      .not('image_url', 'is', null)
-      .order('title', { ascending: true })
-      .limit(MAX_CARDS)
-    if (error) {
-      console.warn('[send_product_carousel] product query failed:', error)
-      return UNAVAILABLE
-    }
-    const rows = (data ?? []) as ProductRow[]
-    const cards = rows
-      .filter((p) => p.image_url && p.title)
-      .map((p) => ({
-        imageUrl: p.image_url!,
-        // Body template must have {{1}} = title, {{2}} = starting price.
-        bodyParams: [p.title, String(p.price_min ?? '')],
-        // URL button template: https://vanamati.com/products/{{1}} — {{1}} = handle.
-        buttonUrlSuffixes: [p.handle ?? ''],
-      }))
-
-    // Meta requires 2-10 cards. If we only have 1 product with an
-    // image, fall back to text.
+    // Shared helper: same cards will be sent by the re-engagement
+    // cron when it fires this template.
+    const cards = await buildProductCarouselCards(ctx.db, ctx.accountId, MAX_CARDS)
     if (cards.length < 2) return MISSING_PRODUCTS
 
     try {
