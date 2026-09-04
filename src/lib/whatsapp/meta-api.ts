@@ -965,6 +965,125 @@ export async function sendInteractiveList(
   return { messageId: data.messages[0].id }
 }
 
+// ============================================================
+// Multi-Product Message (WhatsApp Commerce catalog).
+//
+// A single interactive message that renders as a horizontally-
+// scrollable list of product cards from the account's WhatsApp
+// Business Commerce catalog. Native WhatsApp UI (image, price,
+// "View" button per product) — much richer than a text list, and
+// FREE in-session (no template cost).
+//
+// Requires:
+//   * Meta Business Verified account (already true for Vanamati)
+//   * WhatsApp Business Commerce catalog set up in Meta Business
+//     Manager; catalog_id passed via env WHATSAPP_CATALOG_ID
+//   * Products synced to the catalog with product_retailer_id
+//     matching what we pass (typically the Shopify variant_id
+//     or product_id)
+//
+// Meta docs: https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages#multi-product-messages
+// ============================================================
+
+export interface SendProductListSection {
+  title?: string // required when >1 section; ignored on single-section messages
+  productRetailerIds: string[] // 1-30 per section, 30 max total
+}
+
+export interface SendProductListArgs {
+  phoneNumberId: string
+  accessToken: string
+  to: string
+  catalogId: string
+  bodyText: string // required
+  sections: SendProductListSection[]
+  headerText?: string // optional; text-only header
+  footerText?: string // optional; ≤60 chars
+  contextMessageId?: string // reply-to
+}
+
+export async function sendProductListMessage(
+  args: SendProductListArgs,
+): Promise<MetaSendResult> {
+  const {
+    phoneNumberId,
+    accessToken,
+    to,
+    catalogId,
+    bodyText,
+    sections,
+    headerText,
+    footerText,
+    contextMessageId,
+  } = args
+
+  validateInteractiveBody(bodyText)
+  validateInteractiveHeaderFooter(headerText, footerText)
+  if (!catalogId) throw new Error('sendProductListMessage: catalogId is required.')
+  if (sections.length < 1 || sections.length > 10) {
+    throw new Error(
+      `Multi-product message requires 1-10 sections (got ${sections.length}).`,
+    )
+  }
+  const totalProducts = sections.reduce(
+    (sum, s) => sum + s.productRetailerIds.length,
+    0,
+  )
+  if (totalProducts < 1 || totalProducts > 30) {
+    throw new Error(
+      `Multi-product message requires 1-30 products total across all sections (got ${totalProducts}).`,
+    )
+  }
+  // Meta requires each section title when >1 section.
+  if (sections.length > 1) {
+    for (const [i, s] of sections.entries()) {
+      if (!s.title || !s.title.trim()) {
+        throw new Error(`Multi-product section ${i} requires a title when >1 section.`)
+      }
+    }
+  }
+
+  const interactive: Record<string, unknown> = {
+    type: 'product_list',
+    body: { text: bodyText },
+    action: {
+      catalog_id: catalogId,
+      sections: sections.map((s) => ({
+        ...(s.title ? { title: s.title } : {}),
+        product_items: s.productRetailerIds.map((id) => ({
+          product_retailer_id: id,
+        })),
+      })),
+    },
+  }
+  if (headerText) interactive.header = { type: 'text', text: headerText }
+  if (footerText) interactive.footer = { text: footerText }
+
+  const body: Record<string, unknown> = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to,
+    type: 'interactive',
+    interactive,
+  }
+  if (contextMessageId) body.context = { message_id: contextMessageId }
+
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  return { messageId: data.messages[0].id }
+}
+
 function validateInteractiveBody(bodyText: string): void {
   if (!bodyText) throw new Error('Interactive message requires bodyText.')
   if (bodyText.length > INTERACTIVE_LIMITS.bodyMaxLength) {

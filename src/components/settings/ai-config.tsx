@@ -74,6 +74,12 @@ const AVAILABLE_TOOLS: { name: string; label: string; description: string }[] = 
     description:
       "Let the assistant place orders inside the chat — collects delivery details, creates a real Shopify draft order, and sends the customer a payment link. Requires product_lookup to be enabled, plus VANAMATI_APP_URL + VANAMATI_ORDER_STATUS_KEY.",
   },
+  {
+    name: 'send_product_catalog',
+    label: 'Send WhatsApp product catalogue',
+    description:
+      "On a generic 'hi'/'what do you sell', send the customer a native WhatsApp multi-product message with images, prices, and a 'View' button per card. Free within the 24h session window. Requires a WhatsApp Business Commerce catalog (Meta Business Manager) and WHATSAPP_CATALOG_ID env var. Products auto-synced from Shopify via Meta's Commerce app.",
+  },
 ];
 
 export function AiConfig() {

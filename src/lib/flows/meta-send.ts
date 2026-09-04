@@ -2,6 +2,7 @@ import {
   sendInteractiveButtons,
   sendInteractiveList,
   sendMediaMessage,
+  sendProductListMessage,
   sendTextMessage,
   type InteractiveButton,
   type InteractiveListSection,
@@ -290,6 +291,21 @@ interface SendInteractiveListEngineArgs {
   footerText?: string
 }
 
+export interface SendProductListEngineArgs {
+  accountId: string
+  userId: string
+  conversationId: string
+  contactId: string
+  catalogId: string
+  bodyText: string
+  sections: Array<{
+    title?: string
+    productRetailerIds: string[]
+  }>
+  headerText?: string
+  footerText?: string
+}
+
 /**
  * Send an interactive-button WhatsApp message from the Flows engine.
  *
@@ -456,6 +472,112 @@ async function sendInteractiveViaMeta(
       updated_at: new Date().toISOString(),
     })
     .eq('id', input.conversationId)
+
+  return { whatsapp_message_id: waMessageId }
+}
+
+/**
+ * Send a WhatsApp Multi-Product Message (Commerce catalog) from
+ * the AI or a flow. Renders as a native scrollable list of product
+ * cards with images/prices from the account's WhatsApp Commerce
+ * catalog. Free within the customer's 24hr session window.
+ *
+ * Persists an interactive-type bot message to the inbox with a
+ * short text summary in content_text (the inbox conversation-list
+ * preview picks this up).
+ */
+export async function engineSendProductList(
+  args: SendProductListEngineArgs,
+): Promise<{ whatsapp_message_id: string }> {
+  const db = supabaseAdmin()
+
+  const { data: contact, error: contactErr } = await db
+    .from('contacts')
+    .select('id, phone')
+    .eq('id', args.contactId)
+    .eq('account_id', args.accountId)
+    .maybeSingle()
+  if (contactErr || !contact?.phone) {
+    throw new Error('contact not found for this account')
+  }
+
+  const sanitized = sanitizePhoneForMeta(contact.phone)
+  if (!isValidE164(sanitized)) {
+    throw new Error(`contact phone invalid: ${contact.phone}`)
+  }
+
+  const { data: config, error: configErr } = await db
+    .from('whatsapp_config')
+    .select('*')
+    .eq('account_id', args.accountId)
+    .single()
+  if (configErr || !config) {
+    throw new Error('WhatsApp not configured for this account')
+  }
+
+  const accessToken = decrypt(config.access_token)
+
+  const attempt = async (phone: string): Promise<string> => {
+    const r = await sendProductListMessage({
+      phoneNumberId: config.phone_number_id,
+      accessToken,
+      to: phone,
+      catalogId: args.catalogId,
+      bodyText: args.bodyText,
+      sections: args.sections,
+      headerText: args.headerText,
+      footerText: args.footerText,
+    })
+    return r.messageId
+  }
+
+  const variants = phoneVariants(sanitized)
+  let workingPhone = sanitized
+  let waMessageId = ''
+  let lastError: unknown = null
+  for (const v of variants) {
+    try {
+      waMessageId = await attempt(v)
+      workingPhone = v
+      lastError = null
+      break
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (!isRecipientNotAllowedError(msg)) throw err
+      lastError = err
+    }
+  }
+  if (lastError) throw lastError
+
+  if (workingPhone !== sanitized) {
+    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
+  }
+
+  // Store as interactive message; the content_text is the body so
+  // the inbox preview + conversation-list have a readable summary.
+  // We don't serialize the full product_list payload into
+  // interactive_payload — the inbox renderer doesn't know
+  // product_list yet, so let it fall back to the plain-text body.
+  const { error: msgErr } = await db.from('messages').insert({
+    conversation_id: args.conversationId,
+    sender_type: 'bot',
+    content_type: 'interactive',
+    content_text: args.bodyText,
+    message_id: waMessageId,
+    status: 'sent',
+    ai_generated: true,
+  })
+  if (msgErr) {
+    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+  }
+
+  await db
+    .from('conversations')
+    .update({
+      last_message_text: args.bodyText,
+      last_message_at: new Date().toISOString(),
+    })
+    .eq('id', args.conversationId)
 
   return { whatsapp_message_id: waMessageId }
 }

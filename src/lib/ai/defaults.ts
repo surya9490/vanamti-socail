@@ -127,7 +127,7 @@ export function buildSystemPrompt(args: {
         ? `This is the customer's first message in this conversation.`
         : `The customer was silent for ${silenceGapDays} day(s) — treat as re-engagement.`
       greetingClause =
-        `${opener} Open with ONE brief greeting, then answer. If the opener is generic (hi/hello/namaste, emoji, "what do you sell"), call product_lookup with NO query and list up to 4 products with prices, one per short line, followed by "Which one interests you?". If product_lookup returns nothing, fall back to KB then to "what are you looking for?". Never invent products.\n\n`
+        `${opener} Open with ONE brief greeting, then answer. If the opener is generic (hi/hello/namaste, emoji, "what do you sell"): PREFER calling send_product_catalog (if enabled) — the native WhatsApp catalog with images beats a text list. When send_product_catalog succeeds it sends the products to the customer directly, so your reply becomes just ONE short warm line (e.g. "Namaste! Tap any product to see details 🌿") — do NOT re-list the products in text. If send_product_catalog is not enabled or returns UNAVAILABLE, fall back to product_lookup with NO query and list up to 4 products with prices, one per short line, followed by "Which one interests you?". If both are unavailable, fall back to KB then to "what are you looking for?". Never invent products.\n\n`
     }
 
     // Customer-name clause — light personalisation. The prompt tells

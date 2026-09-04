@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { orderLookupTool } from './order-lookup'
 import { productLookupTool } from './product-lookup'
 import { createDraftOrderTool } from './create-draft-order'
+import { sendProductCatalogTool } from './send-product-catalog'
 
 // ============================================================
 // AI tool registry — the allow-list of actions the assistant may take
@@ -57,6 +58,7 @@ const REGISTRY: Record<string, AiTool> = {
   [orderLookupTool.name]: orderLookupTool,
   [productLookupTool.name]: productLookupTool,
   [createDraftOrderTool.name]: createDraftOrderTool,
+  [sendProductCatalogTool.name]: sendProductCatalogTool,
 }
 
 /** Every registered tool — used by the settings UI to render toggles. */
