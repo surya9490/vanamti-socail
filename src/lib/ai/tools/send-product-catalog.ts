@@ -94,11 +94,20 @@ export const sendProductCatalogTool: AiTool = {
     if (!data || data.length === 0) return MISSING_PRODUCTS
 
     // WhatsApp catalog identifies each catalog item by
-    // product_retailer_id. Meta's Shopify → Meta sync app defaults
-    // to the Shopify product id as retailer_id, so pass
-    // shop_product_id here. If the operator's catalog uses a
-    // different id (variant id, SKU), they can override that
-    // mapping in the sync app config — we only pass the value.
+    // product_retailer_id. Meta's Shopify → Meta sync app formats
+    // this differently depending on the sync setup — sometimes the
+    // raw Shopify product id (8607887392903), sometimes with a
+    // store/region prefix (shopify_IN_8607887392903). If the
+    // operator's Meta catalog uses a prefixed format, set the env
+    // var WHATSAPP_CATALOG_RETAILER_ID_PREFIX to that prefix (e.g.
+    // "shopify_IN_") and the tool will prepend it to every id
+    // before sending.
+    //
+    // Meta rejects the whole message with #131009 (Parameter value
+    // is not valid) if ANY retailer_id doesn't match a catalog
+    // item, so getting this prefix right is essential.
+    const retailerIdPrefix =
+      process.env.WHATSAPP_CATALOG_RETAILER_ID_PREFIX ?? ''
     const productRetailerIds = (
       data as Array<{
         shop_product_id: string
@@ -108,8 +117,12 @@ export const sendProductCatalogTool: AiTool = {
     )
       .map((p) => p.shop_product_id)
       .filter((id): id is string => Boolean(id))
+      .map((id) => `${retailerIdPrefix}${id}`)
     if (productRetailerIds.length === 0) return MISSING_PRODUCTS
 
+    console.log(
+      `[send_product_catalog] sending ${productRetailerIds.length} products; retailer_ids=${JSON.stringify(productRetailerIds)}`,
+    )
     try {
       await engineSendProductList({
         accountId: ctx.accountId,
