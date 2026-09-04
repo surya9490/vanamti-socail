@@ -43,22 +43,29 @@ async function ensureTag(
   if (existing?.id) return existing.id as string
 
   // Ownership of the created tag: `user_id` is the legacy column
-  // (pre-migration 017); leaving it NULL when the account has
-  // multiple members would fail the NOT NULL constraint. Look up
-  // the account owner and use them as the creator.
-  const { data: owner } = await db
-    .from('account_members')
-    .select('user_id')
-    .eq('account_id', accountId)
-    .eq('role', 'owner')
-    .limit(1)
+  // (pre-migration 017); leaving it NULL fails the NOT NULL
+  // constraint (Postgres 23502). The account's owner_user_id
+  // lives directly on the accounts row — that's the source of
+  // truth. Prior version queried a non-existent account_members
+  // table and silently fell through to null, breaking every
+  // auto-reply that tried to grade a contact.
+  const { data: acct } = await db
+    .from('accounts')
+    .select('owner_user_id')
+    .eq('id', accountId)
     .maybeSingle()
+  const ownerUserId = (acct as { owner_user_id?: string } | null)
+    ?.owner_user_id
+  if (!ownerUserId) {
+    console.warn(`[lead-tag] no owner_user_id for account ${accountId}`)
+    return null
+  }
 
   const { data: created, error } = await db
     .from('tags')
     .insert({
       account_id: accountId,
-      user_id: (owner as { user_id?: string } | null)?.user_id ?? null,
+      user_id: ownerUserId,
       name,
       color,
     })
