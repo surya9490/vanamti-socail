@@ -6,42 +6,47 @@ import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 // ============================================================
 // GET /api/cron/re-engagement
 //
-// Silence-based re-engagement sweep. Once per cron tick, we find
-// contacts who:
-//   * are NOT opted out (opted_out_at IS NULL)
-//   * last inbounded > RE_ENGAGEMENT_SILENCE_DAYS days ago
-//   * inbound was within RE_ENGAGEMENT_MAX_AGE_DAYS (skip customers
-//     who went dark >90 days ago — they're likely gone and we
-//     don't want to spam them out of nowhere)
-//   * have NOT been re-engaged in the last
-//     RE_ENGAGEMENT_COOLDOWN_DAYS days
+// Two-stage COLD-lead re-engagement sweep. Fires two different
+// templates at two different silence windows for contacts who
+// reached out but never showed buying interest:
 //
-// For each candidate we send a Meta MARKETING template
-// (RE_ENGAGEMENT_TEMPLATE_NAME) into the contact's most-recent
-// conversation and stamp `last_re_engagement_at`.
+//   Stage 1 (default 3h):  RE_ENGAGEMENT_STAGE_1_TEMPLATE
+//   Stage 2 (default 24h): RE_ENGAGEMENT_STAGE_2_TEMPLATE
 //
-// Why a MARKETING template: the 24hr WhatsApp session window is
-// closed by the time we're re-engaging (>7 days silence), so
-// freeform text is not allowed by Meta policy — a MARKETING
-// category template pre-approved in Meta's dashboard is the ONLY
-// legal way to initiate this. UTILITY templates are for order/
-// account updates, not promotional re-engagement.
+// Eligibility per stage (each stage checked independently):
+//   * opted_out_at IS NULL
+//   * lead_stage = 'cold' (Phase 4 grading — customer showed
+//     no buying intent; hot/warm leads are handled differently)
+//   * conversation exists with at least one customer inbound
+//   * hours since last inbound >= this stage's threshold AND
+//     < the next-stage threshold (stage 1 window is [3h, 24h),
+//     stage 2 window is [24h, MAX_AGE_HOURS])
+//   * respective re_engagement_stage_N_at column IS NULL (never
+//     been sent this stage before — idempotent)
 //
-// Auth: x-cron-secret matches AUTOMATION_CRON_SECRET (reused —
-// same env var the automations/flows cron uses).
+// Each stage sends a MARKETING template into the contact's
+// most-recent conversation and stamps the per-stage timestamp.
+// Once a stage fires for a contact, it never fires again — the
+// column is the idempotency key.
 //
-// Env config (all optional except the template name):
-//   AUTOMATION_CRON_SECRET               shared secret
-//   RE_ENGAGEMENT_TEMPLATE_NAME          required, Meta template name
+// Auth: x-cron-secret matches AUTOMATION_CRON_SECRET.
+//
+// Env config:
+//   AUTOMATION_CRON_SECRET               shared secret (required)
+//   RE_ENGAGEMENT_STAGE_1_TEMPLATE       required to enable stage 1
+//   RE_ENGAGEMENT_STAGE_2_TEMPLATE       required to enable stage 2
+//   RE_ENGAGEMENT_STAGE_1_HOURS          default 3
+//   RE_ENGAGEMENT_STAGE_2_HOURS          default 24
+//   RE_ENGAGEMENT_MAX_AGE_HOURS          default 168 (7 days)
 //   RE_ENGAGEMENT_TEMPLATE_LANG          default 'en'
-//   RE_ENGAGEMENT_SILENCE_DAYS           default 7
-//   RE_ENGAGEMENT_COOLDOWN_DAYS          default 30
-//   RE_ENGAGEMENT_MAX_AGE_DAYS           default 90
 //   RE_ENGAGEMENT_BATCH_SIZE             default 100
 //
-// Missing RE_ENGAGEMENT_TEMPLATE_NAME → 503, so the feature is
-// off-by-default: operators enable it explicitly by setting the
-// template name (after registering + approving it in Meta).
+// Missing BOTH stage template envs → 503 (feature off entirely).
+// Missing ONE → that stage skipped, the other still runs.
+//
+// Cadence: run this cron HOURLY (Railway cron). Stage 1's 3h
+// window is wide enough that hourly checks won't miss any
+// candidate; if you want minute-level precision, run every 15m.
 // ============================================================
 
 function verifyCronSecret(request: Request): boolean {
@@ -59,11 +64,21 @@ function positiveIntEnv(name: string, fallback: number): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback
 }
 
-interface CandidateRow {
-  contact_id: string
+interface ContactRow {
+  id: string
   account_id: string
-  conversation_id: string
-  contact_phone: string | null
+  re_engagement_stage_1_at: string | null
+  re_engagement_stage_2_at: string | null
+}
+
+type StageKey = 'stage_1' | 'stage_2'
+
+interface StageConfig {
+  key: StageKey
+  templateName: string
+  hoursMin: number
+  hoursMax: number
+  timestampColumn: 're_engagement_stage_1_at' | 're_engagement_stage_2_at'
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -71,81 +86,88 @@ export async function GET(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const templateName = process.env.RE_ENGAGEMENT_TEMPLATE_NAME
-  if (!templateName) {
+  const stage1Template = process.env.RE_ENGAGEMENT_STAGE_1_TEMPLATE
+  const stage2Template = process.env.RE_ENGAGEMENT_STAGE_2_TEMPLATE
+  if (!stage1Template && !stage2Template) {
     return NextResponse.json(
       {
         error:
-          're-engagement not configured — set RE_ENGAGEMENT_TEMPLATE_NAME to a Meta-approved MARKETING template',
+          're-engagement not configured — set RE_ENGAGEMENT_STAGE_1_TEMPLATE and/or RE_ENGAGEMENT_STAGE_2_TEMPLATE to Meta-approved MARKETING templates',
       },
       { status: 503 },
     )
   }
   const templateLang = process.env.RE_ENGAGEMENT_TEMPLATE_LANG || 'en'
-  const silenceDays = positiveIntEnv('RE_ENGAGEMENT_SILENCE_DAYS', 7)
-  const cooldownDays = positiveIntEnv('RE_ENGAGEMENT_COOLDOWN_DAYS', 30)
-  const maxAgeDays = positiveIntEnv('RE_ENGAGEMENT_MAX_AGE_DAYS', 90)
+  const stage1Hours = positiveIntEnv('RE_ENGAGEMENT_STAGE_1_HOURS', 3)
+  const stage2Hours = positiveIntEnv('RE_ENGAGEMENT_STAGE_2_HOURS', 24)
+  const maxAgeHours = positiveIntEnv('RE_ENGAGEMENT_MAX_AGE_HOURS', 168)
   const batchSize = Math.min(positiveIntEnv('RE_ENGAGEMENT_BATCH_SIZE', 100), 500)
 
+  // Assemble the enabled stages. Order matters — stage 1's window
+  // ends where stage 2's begins.
+  const stages: StageConfig[] = []
+  if (stage1Template) {
+    stages.push({
+      key: 'stage_1',
+      templateName: stage1Template,
+      hoursMin: stage1Hours,
+      hoursMax: stage2Template ? stage2Hours : maxAgeHours,
+      timestampColumn: 're_engagement_stage_1_at',
+    })
+  }
+  if (stage2Template) {
+    stages.push({
+      key: 'stage_2',
+      templateName: stage2Template,
+      hoursMin: stage2Hours,
+      hoursMax: maxAgeHours,
+      timestampColumn: 're_engagement_stage_2_at',
+    })
+  }
+
   const db = supabaseAdmin()
-
-  // Candidate query. Two LATERAL joins per contact:
-  //   1. last customer inbound (messages.sender_type='customer') for
-  //      the silence-age check
-  //   2. most-recent conversation for that contact, to route the
-  //      template send into
-  // Filtered: not opted out, cooldown expired, inbound is between
-  // (silenceDays, maxAgeDays) days ago.
-  //
-  // No RPC — inline SQL via supabase-js `rpc('exec_raw_sql')` isn't
-  // available here, so we use a stored function. To avoid another
-  // migration for a one-off select, we compose the filter in JS
-  // and issue two round-trips: (a) list eligible contact_ids based
-  // on the simple filters, (b) for each, resolve conversation +
-  // last-inbound in one batched query. This trades one SELECT for
-  // per-contact clarity and keeps the migration surface tiny.
-  //
-  // At Vanamati's scale (< 10k contacts) this is fine. If contacts
-  // grows past ~50k we should replace with a SQL function that
-  // does the JOIN in one shot.
   const nowIso = new Date().toISOString()
-  const cooldownCutoff = new Date(
-    Date.now() - cooldownDays * 24 * 60 * 60 * 1000,
-  ).toISOString()
 
+  // Fetch cold, non-opted-out contacts with at least ONE stage
+  // still eligible. Over-fetches because we then per-contact
+  // check last-inbound age against each stage window.
   const { data: eligibleContacts, error: contactsErr } = await db
     .from('contacts')
-    .select('id, account_id, phone, last_re_engagement_at')
-    .is('opted_out_at', null)
-    .or(
-      `last_re_engagement_at.is.null,last_re_engagement_at.lt.${cooldownCutoff}`,
+    .select(
+      'id, account_id, re_engagement_stage_1_at, re_engagement_stage_2_at',
     )
-    .limit(batchSize * 4) // over-fetch since some rows will filter out on silence-age
+    .is('opted_out_at', null)
+    .eq('lead_stage', 'cold')
+    .or(
+      're_engagement_stage_1_at.is.null,re_engagement_stage_2_at.is.null',
+    )
+    .limit(batchSize * 4)
   if (contactsErr) {
     console.error('[re-engagement] contact query failed:', contactsErr)
     return NextResponse.json({ error: contactsErr.message }, { status: 500 })
   }
   if (!eligibleContacts || eligibleContacts.length === 0) {
-    return NextResponse.json({ candidates: 0, attempted: 0, sent: 0, failed: 0 })
+    return NextResponse.json({
+      candidates: 0,
+      sent: 0,
+      failed: 0,
+      stages: stages.map((s) => s.key),
+    })
   }
 
-  const silenceCutoff = new Date(
-    Date.now() - silenceDays * 24 * 60 * 60 * 1000,
-  ).toISOString()
-  const maxAgeCutoff = new Date(
-    Date.now() - maxAgeDays * 24 * 60 * 60 * 1000,
-  ).toISOString()
+  const now = Date.now()
+  let sent = 0
+  let failed = 0
+  const perStageSent: Record<string, number> = {}
+  const attempted: Array<{ contact_id: string; stage: string }> = []
 
-  const candidates: CandidateRow[] = []
+  for (const rawRow of eligibleContacts) {
+    if (attempted.length >= batchSize) break
+    const row = rawRow as ContactRow
+    const contactId = row.id
+    const accountId = row.account_id
 
-  for (const row of eligibleContacts) {
-    if (candidates.length >= batchSize) break
-    const contactId = row.id as string
-    const accountId = row.account_id as string
-    const phone = (row as { phone?: string }).phone ?? null
-
-    // Route into the most recently active conversation. Also gives
-    // us the conversation ids we need to check for last inbound.
+    // Pick the most-recent conversation for this contact.
     const { data: recentConv } = await db
       .from('conversations')
       .select('id')
@@ -157,10 +179,7 @@ export async function GET(request: Request): Promise<Response> {
     if (!recentConv) continue
     const conversationId = (recentConv as { id: string }).id
 
-    // Last CUSTOMER-sent message on that conversation.
-    // (Vanamati is B2C-ish and contacts typically have one active
-    // thread; if they have several old ones the newest one is the
-    // right routing target and the right silence-age reference.)
+    // Last CUSTOMER-sent message on that thread.
     const { data: lastInbound } = await db
       .from('messages')
       .select('created_at')
@@ -169,55 +188,60 @@ export async function GET(request: Request): Promise<Response> {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-    if (!lastInbound) continue // never inbounded on this thread
-    const createdAt = (lastInbound as { created_at: string }).created_at
-    if (createdAt >= silenceCutoff) continue // too recent, still active
-    if (createdAt < maxAgeCutoff) continue // too old, don't spam-revive
+    if (!lastInbound) continue
+    const hoursSince =
+      (now - new Date((lastInbound as { created_at: string }).created_at).getTime()) /
+      (60 * 60 * 1000)
 
-    candidates.push({
-      contact_id: contactId,
-      account_id: accountId,
-      conversation_id: conversationId,
-      contact_phone: phone,
-    })
-  }
+    // Consider each enabled stage in order. The first one that
+    // matches wins (a single contact never gets two templates in
+    // one cron run — the second stage will fire on a later run
+    // once its own window opens for THAT contact).
+    for (const stage of stages) {
+      const alreadySent =
+        stage.key === 'stage_1'
+          ? row.re_engagement_stage_1_at != null
+          : row.re_engagement_stage_2_at != null
+      if (alreadySent) continue
+      if (hoursSince < stage.hoursMin) continue
+      if (hoursSince >= stage.hoursMax) continue
 
-  let sent = 0
-  let failed = 0
-  for (const c of candidates) {
-    try {
-      await sendMessageToConversation(db, c.account_id, {
-        conversationId: c.conversation_id,
-        messageType: 'template',
-        templateName,
-        templateLanguage: templateLang,
-        // No template params by default; the template's body must
-        // not have any variables OR should have safe defaults.
-        // Extend here once we standardise on a template shape.
-        templateParams: [],
-      })
-      await db
-        .from('contacts')
-        .update({ last_re_engagement_at: nowIso })
-        .eq('id', c.contact_id)
-        .eq('account_id', c.account_id)
-      sent += 1
-    } catch (err) {
-      failed += 1
-      console.warn(
-        `[re-engagement] send failed for contact ${c.contact_id}:`,
-        err instanceof Error ? err.message : err,
-      )
+      attempted.push({ contact_id: contactId, stage: stage.key })
+      try {
+        await sendMessageToConversation(db, accountId, {
+          conversationId,
+          messageType: 'template',
+          templateName: stage.templateName,
+          templateLanguage: templateLang,
+          templateParams: [],
+        })
+        await db
+          .from('contacts')
+          .update({ [stage.timestampColumn]: nowIso })
+          .eq('id', contactId)
+          .eq('account_id', accountId)
+        sent += 1
+        perStageSent[stage.key] = (perStageSent[stage.key] ?? 0) + 1
+      } catch (err) {
+        failed += 1
+        console.warn(
+          `[re-engagement] send failed contact=${contactId} stage=${stage.key}:`,
+          err instanceof Error ? err.message : err,
+        )
+      }
+      break // one stage per contact per cron run
     }
   }
 
   return NextResponse.json({
-    candidates: candidates.length,
-    attempted: candidates.length,
+    candidates: attempted.length,
     sent,
     failed,
-    silenceDays,
-    cooldownDays,
-    maxAgeDays,
+    perStageSent,
+    stages: stages.map((s) => ({
+      key: s.key,
+      template: s.templateName,
+      window_hours: [s.hoursMin, s.hoursMax],
+    })),
   })
 }
