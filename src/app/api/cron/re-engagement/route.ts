@@ -2,8 +2,14 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
-import { engineSendCarouselTemplate } from '@/lib/flows/meta-send'
+import {
+  engineSendCarouselTemplate,
+  engineSendProductList,
+} from '@/lib/flows/meta-send'
 import { buildProductCarouselCards } from '@/lib/products/carousel-cards'
+import { buildProductCatalogRetailerIds } from '@/lib/products/catalog-sections'
+
+const SESSION_WINDOW_HOURS = 24
 
 // ============================================================
 // GET /api/cron/re-engagement
@@ -56,7 +62,8 @@ interface StageRow {
   hours_after: number
   template_name: string
   template_language: string
-  template_type: 'text' | 'carousel'
+  template_type: 'text' | 'carousel' | 'catalog' | 'freeform_text'
+  custom_text: string | null
 }
 
 interface ContactRow {
@@ -88,7 +95,7 @@ export async function GET(request: Request): Promise<Response> {
   const { data: stagesRaw, error: stagesErr } = await db
     .from('re_engagement_stages')
     .select(
-      'id, account_id, name, hours_after, template_name, template_language, template_type',
+      'id, account_id, name, hours_after, template_name, template_language, template_type, custom_text',
     )
     .eq('enabled', true)
     .order('account_id', { ascending: true })
@@ -185,6 +192,22 @@ export async function GET(request: Request): Promise<Response> {
         if (hoursSince < stage.hours_after) continue
         if (sentSet.has(`${contact.id}:${stage.id}`)) continue
 
+        // In-session types (catalog, freeform_text) only work
+        // while the customer's 24h WhatsApp window is still open.
+        // The API blocks configuring them with hours_after >= 24,
+        // but check again defensively in case a stage was
+        // reclassified after being saved — Meta silently drops
+        // freeform sends outside the window.
+        const inSession =
+          stage.template_type === 'catalog' ||
+          stage.template_type === 'freeform_text'
+        if (inSession && hoursSince >= SESSION_WINDOW_HOURS) {
+          console.warn(
+            `[re-engagement] skip contact=${contact.id} stage=${stage.id} (${stage.template_type}): out of 24h session (${hoursSince.toFixed(1)}h)`,
+          )
+          continue
+        }
+
         attempted += 1
         try {
           if (stage.template_type === 'carousel') {
@@ -203,7 +226,44 @@ export async function GET(request: Request): Promise<Response> {
               cards,
               summaryText: `Re-engagement carousel (${stage.name}): ${cards.length} products`,
             })
+          } else if (stage.template_type === 'catalog') {
+            const catalogId = process.env.WHATSAPP_CATALOG_ID
+            if (!catalogId) {
+              throw new Error('WHATSAPP_CATALOG_ID not set — catalog stage cannot fire')
+            }
+            const productRetailerIds = await buildProductCatalogRetailerIds(
+              db,
+              accountId,
+            )
+            if (productRetailerIds.length === 0) {
+              throw new Error('no active products with variants to send')
+            }
+            const bodyText =
+              (stage.custom_text ?? '').trim() ||
+              "Hey! 🌿 Here's what we make at Vanamati — tap any product to see details."
+            await engineSendProductList({
+              accountId,
+              userId: '',
+              conversationId,
+              contactId: contact.id,
+              catalogId,
+              bodyText,
+              sections: [
+                { title: 'Featured', productRetailerIds },
+              ],
+            })
+          } else if (stage.template_type === 'freeform_text') {
+            const bodyText = (stage.custom_text ?? '').trim()
+            if (!bodyText) {
+              throw new Error('freeform_text stage has empty custom_text')
+            }
+            await sendMessageToConversation(db, accountId, {
+              conversationId,
+              messageType: 'text',
+              contentText: bodyText,
+            })
           } else {
+            // 'text' — Meta text template (any time), zero params.
             await sendMessageToConversation(db, accountId, {
               conversationId,
               messageType: 'template',

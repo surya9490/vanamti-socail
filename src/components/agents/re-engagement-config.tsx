@@ -22,13 +22,24 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Loader2, Plus, Trash2, Timer, LayoutGrid, Type, Info } from 'lucide-react'
+import {
+  Loader2,
+  Plus,
+  Trash2,
+  Timer,
+  LayoutGrid,
+  Type,
+  Info,
+  ShoppingBag,
+  MessageSquare,
+} from 'lucide-react'
 import { useAuth } from '@/hooks/use-auth'
 import { canEditSettings } from '@/lib/auth/roles'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Card,
   CardContent,
@@ -44,13 +55,27 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
+type StageType = 'text' | 'carousel' | 'catalog' | 'freeform_text'
+
+const IN_SESSION_TYPES: StageType[] = ['catalog', 'freeform_text']
+const SESSION_WINDOW_HOURS = 24
+
+function needsTemplate(t: StageType): boolean {
+  return t === 'text' || t === 'carousel'
+}
+
+function needsCustomText(t: StageType): boolean {
+  return t === 'freeform_text'
+}
+
 interface Stage {
   id: string
   name: string
   hours_after: number
   template_name: string
   template_language: string
-  template_type: 'text' | 'carousel'
+  template_type: StageType
+  custom_text: string | null
   enabled: boolean
 }
 
@@ -66,7 +91,8 @@ interface NewStageDraft {
   hours_after: string
   template_name: string
   template_language: string
-  template_type: 'text' | 'carousel'
+  template_type: StageType
+  custom_text: string
 }
 
 const EMPTY_DRAFT: NewStageDraft = {
@@ -75,6 +101,7 @@ const EMPTY_DRAFT: NewStageDraft = {
   template_name: '',
   template_language: 'en',
   template_type: 'text',
+  custom_text: '',
 }
 
 function formatHours(h: number): string {
@@ -135,8 +162,19 @@ export function ReEngagementConfig() {
       toast.error('Hours must be a positive number')
       return
     }
-    if (!draft.template_name) {
+    if (
+      IN_SESSION_TYPES.includes(draft.template_type) &&
+      hours >= SESSION_WINDOW_HOURS
+    ) {
+      toast.error('Catalog and freeform stages only work within 24h — WhatsApp closes the session after that.')
+      return
+    }
+    if (needsTemplate(draft.template_type) && !draft.template_name) {
       toast.error('Pick a template')
+      return
+    }
+    if (needsCustomText(draft.template_type) && !draft.custom_text.trim()) {
+      toast.error('Type the message body for the freeform stage')
       return
     }
     setCreating(true)
@@ -147,9 +185,14 @@ export function ReEngagementConfig() {
         body: JSON.stringify({
           name: draft.name.trim(),
           hours_after: hours,
-          template_name: draft.template_name,
+          template_name: needsTemplate(draft.template_type)
+            ? draft.template_name
+            : '',
           template_language: draft.template_language || 'en',
           template_type: draft.template_type,
+          custom_text: needsCustomText(draft.template_type)
+            ? draft.custom_text.trim()
+            : null,
           enabled: true,
         }),
       })
@@ -230,9 +273,10 @@ export function ReEngagementConfig() {
             <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
               <Info className="h-4 w-4 mt-0.5 shrink-0" />
               <div>
-                No approved WhatsApp templates yet. Create a MARKETING template in Meta
-                Business Manager, wait for approval, then sync it under WhatsApp →
-                Templates before configuring a stage here.
+                No approved WhatsApp templates yet — but the free options (Free text,
+                Product catalog) still work for stages under 24h. Create a MARKETING
+                template in Meta Business Manager and sync it under WhatsApp →
+                Templates when you want stages after 24h.
               </div>
             </div>
           ) : null}
@@ -285,67 +329,102 @@ export function ReEngagementConfig() {
                   </p>
                 </div>
                 <div>
-                  <Label>Template</Label>
-                  <Select
-                    value={draft.template_name}
-                    onValueChange={(v) => {
-                      const name = v ?? ''
-                      const picked = templateOptions.find((t) => t.name === name)
-                      setDraft((d) => ({
-                        ...d,
-                        template_name: name,
-                        template_language: picked?.language ?? d.template_language,
-                      }))
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Pick an approved template" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {templateOptions.map((t) => (
-                        <SelectItem key={t.name} value={t.name}>
-                          {t.name}
-                          <span className="ml-2 text-xs text-muted-foreground">
-                            {t.category}
-                          </span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
                   <Label>Type</Label>
                   <Select
                     value={draft.template_type}
-                    onValueChange={(v) =>
-                      setDraft((d) => ({
-                        ...d,
-                        template_type: v === 'carousel' ? 'carousel' : 'text',
-                      }))
-                    }
+                    onValueChange={(v) => {
+                      const t = (v ?? 'text') as StageType
+                      setDraft((d) => ({ ...d, template_type: t }))
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="freeform_text">
+                        <span className="inline-flex items-center gap-2">
+                          <MessageSquare className="h-3.5 w-3.5" /> Free text (in-session only — FREE)
+                        </span>
+                      </SelectItem>
+                      <SelectItem value="catalog">
+                        <span className="inline-flex items-center gap-2">
+                          <ShoppingBag className="h-3.5 w-3.5" /> Product catalog (in-session only — FREE)
+                        </span>
+                      </SelectItem>
                       <SelectItem value="text">
                         <span className="inline-flex items-center gap-2">
-                          <Type className="h-3.5 w-3.5" /> Text template
+                          <Type className="h-3.5 w-3.5" /> Text template (paid — any time)
                         </span>
                       </SelectItem>
                       <SelectItem value="carousel">
                         <span className="inline-flex items-center gap-2">
-                          <LayoutGrid className="h-3.5 w-3.5" /> Product carousel
+                          <LayoutGrid className="h-3.5 w-3.5" /> Carousel template (paid — any time)
                         </span>
                       </SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Carousel injects your active products (image, price, Shop Now link)
-                    into a carousel template — pick a Meta carousel template above.
+                    Free options only work when the customer messaged in the last 24h
+                    (WhatsApp session window). For longer silence, a Meta-approved
+                    template is required.
                   </p>
                 </div>
+                {needsTemplate(draft.template_type) ? (
+                  <div>
+                    <Label>Template</Label>
+                    <Select
+                      value={draft.template_name}
+                      onValueChange={(v) => {
+                        const name = v ?? ''
+                        const picked = templateOptions.find((t) => t.name === name)
+                        setDraft((d) => ({
+                          ...d,
+                          template_name: name,
+                          template_language: picked?.language ?? d.template_language,
+                        }))
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Pick an approved template" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {templateOptions.map((t) => (
+                          <SelectItem key={t.name} value={t.name}>
+                            {t.name}
+                            <span className="ml-2 text-xs text-muted-foreground">
+                              {t.category}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
               </div>
+              {needsCustomText(draft.template_type) ? (
+                <div>
+                  <Label htmlFor="draft-custom-text">Message body</Label>
+                  <Textarea
+                    id="draft-custom-text"
+                    placeholder="e.g. Hey! Noticed you were browsing Vanamati earlier — anything I can help with? 🌿"
+                    value={draft.custom_text}
+                    onChange={(e) => setDraft((d) => ({ ...d, custom_text: e.target.value }))}
+                    rows={3}
+                    maxLength={1000}
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Plain text sent as-is. Max 1000 chars. No variables. Include
+                    "Reply STOP to opt out" — required for re-engagement messages.
+                  </p>
+                </div>
+              ) : null}
+              {draft.template_type === 'catalog' ? (
+                <p className="text-xs text-muted-foreground">
+                  Sends your Meta Commerce catalog as a native product list (image,
+                  price, View button per card). Uses the products the AI already sees.
+                  No template needed.
+                </p>
+              ) : null}
               <div className="flex justify-end gap-2 pt-2">
                 <Button
                   variant="ghost"
@@ -375,7 +454,6 @@ export function ReEngagementConfig() {
               variant="outline"
               onClick={() => setShowDraft(true)}
               className="mt-4"
-              disabled={templateOptions.length === 0}
             >
               <Plus className="mr-1.5 h-4 w-4" /> Add stage
             </Button>
@@ -390,12 +468,16 @@ export function ReEngagementConfig() {
         <CardContent className="text-sm text-muted-foreground space-y-2">
           <p>
             The hourly cron looks at each customer graded <strong>cold</strong> and, for every
-            enabled stage, sends the template exactly once when their silence
+            enabled stage, sends its message exactly once when their silence
             crosses the configured hours. Stages fire in ascending order of hours;
             a customer never receives two stages in the same run.
           </p>
           <p>
-            Cost: MARKETING templates ~₹0.85 per send in India (UTILITY is cheaper).
+            <strong>Cost:</strong> Free text and catalog stages are FREE — they use the open
+            WhatsApp session window (silence &lt; 24h). Template stages are ~₹0.85/send
+            (MARKETING) — required once the session closes.
+          </p>
+          <p>
             To pause everything without deleting, disable each stage — deleting a
             stage also drops its send-history rows, so re-adding it will resend to
             people who already received it. Prefer disable → re-enable for reversible pauses.
@@ -487,17 +569,13 @@ function StageRow({
           />
         </div>
         <div>
-          <Label className="text-xs">Template</Label>
+          <Label className="text-xs">Type</Label>
           <Select
-            value={stage.template_name}
+            value={stage.template_type}
             onValueChange={(v) => {
-              const name = v ?? ''
-              if (!name) return
-              const picked = templates.find((t) => t.name === name)
-              onPatch({
-                template_name: name,
-                template_language: picked?.language ?? stage.template_language,
-              })
+              const t = (v ?? 'text') as StageType
+              if (t === stage.template_type) return
+              onPatch({ template_type: t })
             }}
             disabled={!canEdit}
           >
@@ -505,41 +583,101 @@ function StageRow({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {templates.map((t) => (
-                <SelectItem key={t.name} value={t.name}>
-                  {t.name}
-                </SelectItem>
-              ))}
-              {/* Keep the current value selectable even if it was
-                  deleted / not approved any more, so the row shows
-                  what's live server-side. */}
-              {!templates.some((t) => t.name === stage.template_name) ? (
-                <SelectItem value={stage.template_name}>
-                  {stage.template_name} (not approved)
-                </SelectItem>
-              ) : null}
+              <SelectItem value="freeform_text">Free text (FREE)</SelectItem>
+              <SelectItem value="catalog">Product catalog (FREE)</SelectItem>
+              <SelectItem value="text">Text template (paid)</SelectItem>
+              <SelectItem value="carousel">Carousel template (paid)</SelectItem>
             </SelectContent>
           </Select>
         </div>
-        <div>
-          <Label className="text-xs">Type</Label>
-          <Select
-            value={stage.template_type}
-            onValueChange={(v) =>
-              onPatch({ template_type: v === 'carousel' ? 'carousel' : 'text' })
-            }
-            disabled={!canEdit}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="text">Text template</SelectItem>
-              <SelectItem value="carousel">Product carousel</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+        {needsTemplate(stage.template_type) ? (
+          <div>
+            <Label className="text-xs">Template</Label>
+            <Select
+              value={stage.template_name}
+              onValueChange={(v) => {
+                const name = v ?? ''
+                if (!name) return
+                const picked = templates.find((t) => t.name === name)
+                onPatch({
+                  template_name: name,
+                  template_language: picked?.language ?? stage.template_language,
+                })
+              }}
+              disabled={!canEdit}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Pick a template" />
+              </SelectTrigger>
+              <SelectContent>
+                {templates.map((t) => (
+                  <SelectItem key={t.name} value={t.name}>
+                    {t.name}
+                  </SelectItem>
+                ))}
+                {stage.template_name &&
+                !templates.some((t) => t.name === stage.template_name) ? (
+                  <SelectItem value={stage.template_name}>
+                    {stage.template_name} (not approved)
+                  </SelectItem>
+                ) : null}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
       </div>
+      {needsCustomText(stage.template_type) ? (
+        <div className="mt-3">
+          <Label className="text-xs">Message body</Label>
+          <StageCustomText
+            value={stage.custom_text ?? ''}
+            disabled={!canEdit}
+            onCommit={(v) => onPatch({ custom_text: v })}
+          />
+        </div>
+      ) : null}
+      {stage.template_type === 'catalog' ? (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Sends your Meta Commerce catalog as a native product list (image, price,
+          View button per card). No template needed.
+        </p>
+      ) : null}
+      {IN_SESSION_TYPES.includes(stage.template_type) &&
+      stage.hours_after >= SESSION_WINDOW_HOURS ? (
+        <p className="mt-3 text-xs text-amber-700 dark:text-amber-400">
+          ⚠ This type only works within 24h of the customer's last message. Drop
+          hours below 24 or switch to a template type.
+        </p>
+      ) : null}
     </div>
+  )
+}
+
+function StageCustomText({
+  value,
+  disabled,
+  onCommit,
+}: {
+  value: string
+  disabled: boolean
+  onCommit: (v: string) => void
+}) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => {
+    setDraft(value)
+  }, [value])
+  return (
+    <Textarea
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        const v = draft.trim()
+        if (v && v !== value) onCommit(v)
+        else setDraft(value)
+      }}
+      rows={3}
+      maxLength={1000}
+      disabled={disabled}
+    />
   )
 }

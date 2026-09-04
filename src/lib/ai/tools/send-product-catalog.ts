@@ -1,6 +1,6 @@
 import type { AiTool } from './registry'
 import { engineSendProductList } from '@/lib/flows/meta-send'
-import type { ProductVariant } from '@/lib/products/types'
+import { buildProductCatalogRetailerIds } from '@/lib/products/catalog-sections'
 
 // ============================================================
 // send_product_catalog tool — sends a native WhatsApp Multi-Product
@@ -78,54 +78,13 @@ export const sendProductCatalogTool: AiTool = {
         ? args.header_text.trim()
         : undefined
 
-    // Pull top N active products from the cache. Deterministic by
-    // title so the same catalog appears reply-to-reply.
-    const { data, error } = await ctx.db
-      .from('products')
-      .select('shop_product_id, variants, title')
-      .eq('account_id', ctx.accountId)
-      .eq('is_active', true)
-      .order('title', { ascending: true })
-      .limit(MAX_PRODUCTS)
-    if (error) {
-      console.warn('[send_product_catalog] product query failed:', error)
-      return UNAVAILABLE
-    }
-    if (!data || data.length === 0) return MISSING_PRODUCTS
-
-    // Meta's Shopify Commerce sync creates one catalog item PER
-    // VARIANT. The catalog's product_retailer_id (shown as
-    // "Content ID" in Meta Commerce Manager) is the Shopify
-    // variant id — NOT the product id. Product-level identifier
-    // is Meta's "Group ID" which cannot be sent as a
-    // product_retailer_id in a Multi-Product Message.
-    //
-    // Strategy: one CARD per product, keyed on the product's
-    // cheapest (usually smallest-size) variant. Meta renders that
-    // variant's image + price; on tap the customer opens the
-    // product page and can pick other sizes.
-    //
-    // Optional prefix env for edge cases where a non-Shopify
-    // catalog uses a prefixed retailer_id format.
-    const retailerIdPrefix =
-      process.env.WHATSAPP_CATALOG_RETAILER_ID_PREFIX ?? ''
-    const rows = data as Array<{
-      shop_product_id: string
-      variants?: ProductVariant[] | null
-      title: string
-    }>
-    const productRetailerIds = rows
-      .map((p) => {
-        const variants = Array.isArray(p.variants) ? p.variants : []
-        // Cheapest variant first (usually the smallest size — cheapest
-        // entry point, and the one most customers evaluate).
-        const pickedVariant = [...variants]
-          .filter((v) => v && v.id)
-          .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))[0]
-        return pickedVariant?.id ?? null
-      })
-      .filter((id): id is string => Boolean(id))
-      .map((id) => `${retailerIdPrefix}${id}`)
+    // Shared helper: same list the re-engagement cron sends when
+    // running a stage of type='catalog'.
+    const productRetailerIds = await buildProductCatalogRetailerIds(
+      ctx.db,
+      ctx.accountId,
+      MAX_PRODUCTS,
+    )
     if (productRetailerIds.length === 0) return MISSING_PRODUCTS
 
     console.log(

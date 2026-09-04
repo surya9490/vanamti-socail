@@ -14,13 +14,25 @@ import { requireRole, toErrorResponse } from '@/lib/auth/account'
 
 const MAX_STAGES_PER_ACCOUNT = 20
 
+type StageType = 'text' | 'carousel' | 'catalog' | 'freeform_text'
+
+const IN_SESSION_TYPES: StageType[] = ['catalog', 'freeform_text']
+const SESSION_WINDOW_HOURS = 24
+
 interface CreateBody {
   name?: unknown
   hours_after?: unknown
   template_name?: unknown
   template_language?: unknown
   template_type?: unknown
+  custom_text?: unknown
   enabled?: unknown
+}
+
+function parseType(raw: unknown): StageType {
+  if (raw === 'carousel' || raw === 'catalog' || raw === 'freeform_text')
+    return raw
+  return 'text'
 }
 
 function parseCreate(raw: CreateBody | null): {
@@ -30,7 +42,8 @@ function parseCreate(raw: CreateBody | null): {
     hours_after: number
     template_name: string
     template_language: string
-    template_type: 'text' | 'carousel'
+    template_type: StageType
+    custom_text: string | null
     enabled: boolean
   }
 } | { ok: false; error: string } {
@@ -45,17 +58,41 @@ function parseCreate(raw: CreateBody | null): {
   if (hours > 24 * 365)
     return { ok: false, error: 'hours_after too large (max 1 year)' }
 
+  const templateType = parseType(raw.template_type)
+
+  // In-session types (catalog / freeform_text) only work inside
+  // WhatsApp's 24h session window — reject an operator that sets
+  // hours_after >= 24 with these types. It's a hard rule at Meta,
+  // not a preference — sending catalog/freeform outside 24h fails.
+  if (IN_SESSION_TYPES.includes(templateType) && hours >= SESSION_WINDOW_HOURS) {
+    return {
+      ok: false,
+      error: `${templateType === 'catalog' ? 'Product catalog' : 'Freeform text'} stages must fire within 24h of the customer's last message. Set hours_after to less than 24, or pick a Meta template type for later stages.`,
+    }
+  }
+
+  // Template name is only meaningful for the two template types;
+  // stored as empty string when the type doesn't need it.
+  const needsTemplateName = templateType === 'text' || templateType === 'carousel'
   const templateName =
     typeof raw.template_name === 'string' ? raw.template_name.trim() : ''
-  if (!templateName) return { ok: false, error: 'template_name is required' }
+  if (needsTemplateName && !templateName)
+    return { ok: false, error: 'template_name is required for template types' }
 
   const templateLang =
     typeof raw.template_language === 'string' && raw.template_language.trim()
       ? raw.template_language.trim()
       : 'en'
 
-  const templateType =
-    raw.template_type === 'carousel' ? 'carousel' : 'text'
+  // custom_text is required for freeform_text (that's the whole body).
+  const customText =
+    typeof raw.custom_text === 'string' ? raw.custom_text.trim() : ''
+  if (templateType === 'freeform_text') {
+    if (!customText)
+      return { ok: false, error: 'Freeform text stages need a message body (custom_text).' }
+    if (customText.length > 1000)
+      return { ok: false, error: 'custom_text too long (max 1000 chars — WhatsApp caps freeform text)' }
+  }
 
   const enabled = raw.enabled === undefined ? true : Boolean(raw.enabled)
 
@@ -64,9 +101,10 @@ function parseCreate(raw: CreateBody | null): {
     value: {
       name,
       hours_after: hours,
-      template_name: templateName,
+      template_name: needsTemplateName ? templateName : '',
       template_language: templateLang,
       template_type: templateType,
+      custom_text: customText || null,
       enabled,
     },
   }
@@ -78,7 +116,7 @@ export async function GET() {
     const { data, error } = await ctx.supabase
       .from('re_engagement_stages')
       .select(
-        'id, name, hours_after, template_name, template_language, template_type, enabled, created_at, updated_at',
+        'id, name, hours_after, template_name, template_language, template_type, custom_text, enabled, created_at, updated_at',
       )
       .eq('account_id', ctx.accountId)
       .order('hours_after', { ascending: true })
@@ -113,7 +151,7 @@ export async function POST(request: Request) {
       .from('re_engagement_stages')
       .insert({ account_id: ctx.accountId, ...parsed.value })
       .select(
-        'id, name, hours_after, template_name, template_language, template_type, enabled, created_at, updated_at',
+        'id, name, hours_after, template_name, template_language, template_type, custom_text, enabled, created_at, updated_at',
       )
       .single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
