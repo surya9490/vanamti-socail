@@ -93,29 +93,37 @@ export const sendProductCatalogTool: AiTool = {
     }
     if (!data || data.length === 0) return MISSING_PRODUCTS
 
-    // WhatsApp catalog identifies each catalog item by
-    // product_retailer_id. Meta's Shopify → Meta sync app formats
-    // this differently depending on the sync setup — sometimes the
-    // raw Shopify product id (8607887392903), sometimes with a
-    // store/region prefix (shopify_IN_8607887392903). If the
-    // operator's Meta catalog uses a prefixed format, set the env
-    // var WHATSAPP_CATALOG_RETAILER_ID_PREFIX to that prefix (e.g.
-    // "shopify_IN_") and the tool will prepend it to every id
-    // before sending.
+    // Meta's Shopify Commerce sync creates one catalog item PER
+    // VARIANT. The catalog's product_retailer_id (shown as
+    // "Content ID" in Meta Commerce Manager) is the Shopify
+    // variant id — NOT the product id. Product-level identifier
+    // is Meta's "Group ID" which cannot be sent as a
+    // product_retailer_id in a Multi-Product Message.
     //
-    // Meta rejects the whole message with #131009 (Parameter value
-    // is not valid) if ANY retailer_id doesn't match a catalog
-    // item, so getting this prefix right is essential.
+    // Strategy: one CARD per product, keyed on the product's
+    // cheapest (usually smallest-size) variant. Meta renders that
+    // variant's image + price; on tap the customer opens the
+    // product page and can pick other sizes.
+    //
+    // Optional prefix env for edge cases where a non-Shopify
+    // catalog uses a prefixed retailer_id format.
     const retailerIdPrefix =
       process.env.WHATSAPP_CATALOG_RETAILER_ID_PREFIX ?? ''
-    const productRetailerIds = (
-      data as Array<{
-        shop_product_id: string
-        variants?: ProductVariant[] | null
-        title: string
-      }>
-    )
-      .map((p) => p.shop_product_id)
+    const rows = data as Array<{
+      shop_product_id: string
+      variants?: ProductVariant[] | null
+      title: string
+    }>
+    const productRetailerIds = rows
+      .map((p) => {
+        const variants = Array.isArray(p.variants) ? p.variants : []
+        // Cheapest variant first (usually the smallest size — cheapest
+        // entry point, and the one most customers evaluate).
+        const pickedVariant = [...variants]
+          .filter((v) => v && v.id)
+          .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))[0]
+        return pickedVariant?.id ?? null
+      })
       .filter((id): id is string => Boolean(id))
       .map((id) => `${retailerIdPrefix}${id}`)
     if (productRetailerIds.length === 0) return MISSING_PRODUCTS
