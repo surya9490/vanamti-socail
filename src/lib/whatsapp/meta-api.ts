@@ -966,6 +966,136 @@ export async function sendInteractiveList(
 }
 
 // ============================================================
+// Carousel Template Message (Meta Marketing template with cards).
+//
+// A pre-approved MARKETING template that renders as a horizontally
+// scrollable carousel of product cards inside WhatsApp. Each card
+// carries an image, body text, and up to 2 buttons (URL / phone /
+// quick_reply). Works OUTSIDE the customer's 24hr session window
+// — that's the whole point of using a template — but each send is
+// billed by Meta at the MARKETING rate (~₹0.85 in India).
+//
+// Requires:
+//   * Template designed + submitted in Meta Business Manager
+//     (Templates → Create → Carousel), category MARKETING
+//   * 1-3 day Meta review before it can be sent
+//   * Template name + language set as env WHATSAPP_CAROUSEL_TEMPLATE_NAME
+//     + WHATSAPP_CAROUSEL_TEMPLATE_LANG
+//
+// Meta docs: https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates/carousel-message-templates
+// ============================================================
+
+/** One card in a carousel template send. Body / URL-button
+ *  parameters are the ORDER the template's {{n}} placeholders
+ *  appear in — text values only; Meta substitutes them in. */
+export interface CarouselCard {
+  imageUrl: string // header image, must be an HTTPS URL Meta can fetch
+  bodyParams?: string[] // fills the card body's {{1}}, {{2}}, ...
+  buttonUrlSuffixes?: string[] // one per URL button (in order); each fills the URL button's {{1}} suffix
+}
+
+export interface SendCarouselTemplateArgs {
+  phoneNumberId: string
+  accessToken: string
+  to: string
+  templateName: string
+  language: string // e.g. 'en', 'en_US'
+  bodyParams?: string[] // fills the template-level body's {{1}}, {{2}}, ...
+  cards: CarouselCard[] // 2-10 cards
+  contextMessageId?: string
+}
+
+export async function sendCarouselTemplateMessage(
+  args: SendCarouselTemplateArgs,
+): Promise<MetaSendResult> {
+  const {
+    phoneNumberId,
+    accessToken,
+    to,
+    templateName,
+    language,
+    bodyParams,
+    cards,
+    contextMessageId,
+  } = args
+
+  if (!templateName) throw new Error('sendCarouselTemplateMessage: templateName is required.')
+  if (cards.length < 2 || cards.length > 10) {
+    throw new Error(
+      `Carousel template requires 2-10 cards (got ${cards.length}).`,
+    )
+  }
+  for (const [i, c] of cards.entries()) {
+    if (!c.imageUrl) throw new Error(`Carousel card ${i} missing imageUrl.`)
+  }
+
+  const components: Array<Record<string, unknown>> = []
+  if (bodyParams && bodyParams.length > 0) {
+    components.push({
+      type: 'body',
+      parameters: bodyParams.map((text) => ({ type: 'text', text })),
+    })
+  }
+
+  components.push({
+    type: 'carousel',
+    cards: cards.map((card, idx) => {
+      const cardComponents: Array<Record<string, unknown>> = [
+        {
+          type: 'header',
+          parameters: [{ type: 'image', image: { link: card.imageUrl } }],
+        },
+      ]
+      if (card.bodyParams && card.bodyParams.length > 0) {
+        cardComponents.push({
+          type: 'body',
+          parameters: card.bodyParams.map((text) => ({ type: 'text', text })),
+        })
+      }
+      if (card.buttonUrlSuffixes && card.buttonUrlSuffixes.length > 0) {
+        card.buttonUrlSuffixes.forEach((suffix, buttonIdx) => {
+          cardComponents.push({
+            type: 'button',
+            sub_type: 'url',
+            index: String(buttonIdx),
+            parameters: [{ type: 'text', text: suffix }],
+          })
+        })
+      }
+      return { card_index: idx, components: cardComponents }
+    }),
+  })
+
+  const body: Record<string, unknown> = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to,
+    type: 'template',
+    template: {
+      name: templateName,
+      language: { code: language },
+      components,
+    },
+  }
+  if (contextMessageId) body.context = { message_id: contextMessageId }
+
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  return { messageId: data.messages[0].id }
+}
+
+// ============================================================
 // Multi-Product Message (WhatsApp Commerce catalog).
 //
 // A single interactive message that renders as a horizontally-

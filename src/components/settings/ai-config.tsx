@@ -80,6 +80,12 @@ const AVAILABLE_TOOLS: { name: string; label: string; description: string }[] = 
     description:
       "On a generic 'hi'/'what do you sell', send the customer a native WhatsApp multi-product message with images, prices, and a 'View' button per card. Free within the 24h session window. Requires a WhatsApp Business Commerce catalog (Meta Business Manager) and WHATSAPP_CATALOG_ID env var. Products auto-synced from Shopify via Meta's Commerce app.",
   },
+  {
+    name: 'send_product_carousel',
+    label: 'Send product carousel (Marketing template)',
+    description:
+      "Send a paid MARKETING carousel template with product cards + Shop Now buttons — the only way to send a rich visual message OUTSIDE the customer's 24h session window (re-engagement, silent-customer follow-ups). Each send costs ~₹0.85 in India. Requires a Meta-approved carousel template (WhatsApp Business Manager, 1-3 day review) and WHATSAPP_CAROUSEL_TEMPLATE_NAME env var.",
+  },
 ];
 
 export function AiConfig() {

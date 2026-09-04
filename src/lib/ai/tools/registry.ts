@@ -3,6 +3,7 @@ import { orderLookupTool } from './order-lookup'
 import { productLookupTool } from './product-lookup'
 import { createDraftOrderTool } from './create-draft-order'
 import { sendProductCatalogTool } from './send-product-catalog'
+import { sendProductCarouselTool } from './send-product-carousel'
 
 // ============================================================
 // AI tool registry — the allow-list of actions the assistant may take
@@ -59,6 +60,7 @@ const REGISTRY: Record<string, AiTool> = {
   [productLookupTool.name]: productLookupTool,
   [createDraftOrderTool.name]: createDraftOrderTool,
   [sendProductCatalogTool.name]: sendProductCatalogTool,
+  [sendProductCarouselTool.name]: sendProductCarouselTool,
 }
 
 /** Every registered tool — used by the settings UI to render toggles. */
