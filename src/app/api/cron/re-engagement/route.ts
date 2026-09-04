@@ -8,55 +8,30 @@ import { buildProductCarouselCards } from '@/lib/products/carousel-cards'
 // ============================================================
 // GET /api/cron/re-engagement
 //
-// Two-stage COLD-lead re-engagement sweep. Fires two different
-// templates at two different silence windows for contacts who
-// reached out but never showed buying interest:
+// Runs the account-configured re-engagement stages every hour.
+// Stages are edited from /agents → Re-engagement (table
+// re_engagement_stages).
 //
-//   Stage 1 (default 3h):  RE_ENGAGEMENT_STAGE_1_TEMPLATE
-//   Stage 2 (default 24h): RE_ENGAGEMENT_STAGE_2_TEMPLATE
+// Per stage:
+//   * only contacts graded 'cold' (Phase 4) and not opted-out
+//   * customer silent for at least `hours_after`
+//   * silent for less than MAX_AGE_HOURS (7d default — abandon
+//     truly dark contacts)
+//   * this stage NOT already sent to this contact (idempotency
+//     lives in contact_re_engagement_sends)
 //
-// Eligibility per stage (each stage checked independently):
-//   * opted_out_at IS NULL
-//   * lead_stage = 'cold' (Phase 4 grading — customer showed
-//     no buying intent; hot/warm leads are handled differently)
-//   * conversation exists with at least one customer inbound
-//   * hours since last inbound >= this stage's threshold AND
-//     < the next-stage threshold (stage 1 window is [3h, 24h),
-//     stage 2 window is [24h, MAX_AGE_HOURS])
-//   * respective re_engagement_stage_N_at column IS NULL (never
-//     been sent this stage before — idempotent)
+// For each match: send the stage's template — text or product
+// carousel — and record the send row.
 //
-// Each stage sends a MARKETING template into the contact's
-// most-recent conversation and stamps the per-stage timestamp.
-// Once a stage fires for a contact, it never fires again — the
-// column is the idempotency key.
+// One contact receives at most one stage per cron run (the loop
+// breaks after the first match), so if multiple stages become
+// eligible at the same moment (rare — happens if the cron missed
+// several runs) the earliest wins; the others fire on the next
+// hourly run.
 //
-// Auth: x-cron-secret matches AUTOMATION_CRON_SECRET.
-//
-// Env config:
-//   AUTOMATION_CRON_SECRET               shared secret (required)
-//   RE_ENGAGEMENT_STAGE_1_TEMPLATE       required to enable stage 1
-//   RE_ENGAGEMENT_STAGE_2_TEMPLATE       required to enable stage 2
-//   RE_ENGAGEMENT_STAGE_1_HOURS          default 3
-//   RE_ENGAGEMENT_STAGE_2_HOURS          default 24
-//   RE_ENGAGEMENT_MAX_AGE_HOURS          default 168 (7 days)
-//   RE_ENGAGEMENT_TEMPLATE_LANG          default 'en'
-//   RE_ENGAGEMENT_BATCH_SIZE             default 100
-//   RE_ENGAGEMENT_STAGE_1_TYPE           'text' (default) | 'carousel'
-//   RE_ENGAGEMENT_STAGE_2_TYPE           'text' (default) | 'carousel'
-//
-// Carousel stages reuse the same Meta MARKETING carousel template
-// the AI's send_product_carousel tool uses (per-card {{1}} = title,
-// {{2}} = price; URL button {{1}} = handle; body {{1}} = "there").
-// The cron builds cards from the account's product cache — same
-// helper as the tool, so what customers see is identical.
-//
-// Missing BOTH stage template envs → 503 (feature off entirely).
-// Missing ONE → that stage skipped, the other still runs.
-//
-// Cadence: run this cron HOURLY (Railway cron). Stage 1's 3h
-// window is wide enough that hourly checks won't miss any
-// candidate; if you want minute-level precision, run every 15m.
+// Auth: x-cron-secret header matches AUTOMATION_CRON_SECRET.
+// Env: RE_ENGAGEMENT_MAX_AGE_HOURS (default 168 = 7d),
+//      RE_ENGAGEMENT_BATCH_SIZE (default 100, cap 500).
 // ============================================================
 
 function verifyCronSecret(request: Request): boolean {
@@ -74,27 +49,24 @@ function positiveIntEnv(name: string, fallback: number): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback
 }
 
+interface StageRow {
+  id: string
+  account_id: string
+  name: string
+  hours_after: number
+  template_name: string
+  template_language: string
+  template_type: 'text' | 'carousel'
+}
+
 interface ContactRow {
   id: string
   account_id: string
-  re_engagement_stage_1_at: string | null
-  re_engagement_stage_2_at: string | null
 }
 
-type StageKey = 'stage_1' | 'stage_2'
-type StageType = 'text' | 'carousel'
-
-interface StageConfig {
-  key: StageKey
-  templateName: string
-  templateType: StageType
-  hoursMin: number
-  hoursMax: number
-  timestampColumn: 're_engagement_stage_1_at' | 're_engagement_stage_2_at'
-}
-
-function parseStageType(raw: string | undefined): StageType {
-  return raw?.toLowerCase() === 'carousel' ? 'carousel' : 'text'
+interface SentPair {
+  contact_id: string
+  stage_id: string
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -102,187 +74,170 @@ export async function GET(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const stage1Template = process.env.RE_ENGAGEMENT_STAGE_1_TEMPLATE
-  const stage2Template = process.env.RE_ENGAGEMENT_STAGE_2_TEMPLATE
-  if (!stage1Template && !stage2Template) {
-    return NextResponse.json(
-      {
-        error:
-          're-engagement not configured — set RE_ENGAGEMENT_STAGE_1_TEMPLATE and/or RE_ENGAGEMENT_STAGE_2_TEMPLATE to Meta-approved MARKETING templates',
-      },
-      { status: 503 },
-    )
-  }
-  const templateLang = process.env.RE_ENGAGEMENT_TEMPLATE_LANG || 'en'
-  const stage1Hours = positiveIntEnv('RE_ENGAGEMENT_STAGE_1_HOURS', 3)
-  const stage2Hours = positiveIntEnv('RE_ENGAGEMENT_STAGE_2_HOURS', 24)
   const maxAgeHours = positiveIntEnv('RE_ENGAGEMENT_MAX_AGE_HOURS', 168)
   const batchSize = Math.min(positiveIntEnv('RE_ENGAGEMENT_BATCH_SIZE', 100), 500)
-
-  // Assemble the enabled stages. Order matters — stage 1's window
-  // ends where stage 2's begins.
-  const stages: StageConfig[] = []
-  if (stage1Template) {
-    stages.push({
-      key: 'stage_1',
-      templateName: stage1Template,
-      templateType: parseStageType(process.env.RE_ENGAGEMENT_STAGE_1_TYPE),
-      hoursMin: stage1Hours,
-      hoursMax: stage2Template ? stage2Hours : maxAgeHours,
-      timestampColumn: 're_engagement_stage_1_at',
-    })
-  }
-  if (stage2Template) {
-    stages.push({
-      key: 'stage_2',
-      templateName: stage2Template,
-      templateType: parseStageType(process.env.RE_ENGAGEMENT_STAGE_2_TYPE),
-      hoursMin: stage2Hours,
-      hoursMax: maxAgeHours,
-      timestampColumn: 're_engagement_stage_2_at',
-    })
-  }
 
   const db = supabaseAdmin()
   const nowIso = new Date().toISOString()
 
-  // Fetch cold, non-opted-out contacts with at least ONE stage
-  // still eligible. Over-fetches because we then per-contact
-  // check last-inbound age against each stage window.
-  const { data: eligibleContacts, error: contactsErr } = await db
-    .from('contacts')
+  // ------------------------------------------------------------
+  // 1. Pull every enabled stage across all accounts. In practice
+  //    this is a handful of rows per account × a small number of
+  //    accounts, so a single scan is fine.
+  // ------------------------------------------------------------
+  const { data: stagesRaw, error: stagesErr } = await db
+    .from('re_engagement_stages')
     .select(
-      'id, account_id, re_engagement_stage_1_at, re_engagement_stage_2_at',
+      'id, account_id, name, hours_after, template_name, template_language, template_type',
     )
-    .is('opted_out_at', null)
-    .eq('lead_stage', 'cold')
-    .or(
-      're_engagement_stage_1_at.is.null,re_engagement_stage_2_at.is.null',
-    )
-    .limit(batchSize * 4)
-  if (contactsErr) {
-    console.error('[re-engagement] contact query failed:', contactsErr)
-    return NextResponse.json({ error: contactsErr.message }, { status: 500 })
+    .eq('enabled', true)
+    .order('account_id', { ascending: true })
+    .order('hours_after', { ascending: true })
+  if (stagesErr) {
+    console.error('[re-engagement] stages query failed:', stagesErr)
+    return NextResponse.json({ error: stagesErr.message }, { status: 500 })
   }
-  if (!eligibleContacts || eligibleContacts.length === 0) {
-    return NextResponse.json({
-      candidates: 0,
-      sent: 0,
-      failed: 0,
-      stages: stages.map((s) => s.key),
-    })
+  const stages = (stagesRaw ?? []) as StageRow[]
+  if (stages.length === 0) {
+    return NextResponse.json({ candidates: 0, sent: 0, failed: 0, stages: 0 })
   }
 
-  const now = Date.now()
+  // Group stages by account so we scan each account's cold
+  // contacts once and consider all of that account's stages.
+  const stagesByAccount = new Map<string, StageRow[]>()
+  for (const s of stages) {
+    const arr = stagesByAccount.get(s.account_id) ?? []
+    arr.push(s)
+    stagesByAccount.set(s.account_id, arr)
+  }
+
   let sent = 0
   let failed = 0
+  let attempted = 0
   const perStageSent: Record<string, number> = {}
-  const attempted: Array<{ contact_id: string; stage: string }> = []
 
-  for (const rawRow of eligibleContacts) {
-    if (attempted.length >= batchSize) break
-    const row = rawRow as ContactRow
-    const contactId = row.id
-    const accountId = row.account_id
+  for (const [accountId, accountStages] of stagesByAccount.entries()) {
+    if (attempted >= batchSize) break
 
-    // Pick the most-recent conversation for this contact.
-    const { data: recentConv } = await db
-      .from('conversations')
-      .select('id')
-      .eq('contact_id', contactId)
+    // Cold non-opted-out contacts for this account.
+    const { data: contactsRaw, error: contactsErr } = await db
+      .from('contacts')
+      .select('id, account_id')
       .eq('account_id', accountId)
-      .order('last_message_at', { ascending: false, nullsFirst: false })
-      .limit(1)
-      .maybeSingle()
-    if (!recentConv) continue
-    const conversationId = (recentConv as { id: string }).id
+      .eq('lead_stage', 'cold')
+      .is('opted_out_at', null)
+      .limit(batchSize * 4)
+    if (contactsErr) {
+      console.warn(`[re-engagement] contacts query failed account=${accountId}:`, contactsErr)
+      continue
+    }
+    const contacts = (contactsRaw ?? []) as ContactRow[]
+    if (contacts.length === 0) continue
 
-    // Last CUSTOMER-sent message on that thread.
-    const { data: lastInbound } = await db
-      .from('messages')
-      .select('created_at')
-      .eq('conversation_id', conversationId)
-      .eq('sender_type', 'customer')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    if (!lastInbound) continue
-    const hoursSince =
-      (now - new Date((lastInbound as { created_at: string }).created_at).getTime()) /
-      (60 * 60 * 1000)
+    // Bulk-fetch already-sent (contact_id, stage_id) pairs for
+    // this account so per-contact loops don't re-query.
+    const stageIds = accountStages.map((s) => s.id)
+    const contactIds = contacts.map((c) => c.id)
+    const { data: sentRows } = await db
+      .from('contact_re_engagement_sends')
+      .select('contact_id, stage_id')
+      .eq('account_id', accountId)
+      .in('stage_id', stageIds)
+      .in('contact_id', contactIds)
+    const sentSet = new Set(
+      ((sentRows ?? []) as SentPair[]).map((r) => `${r.contact_id}:${r.stage_id}`),
+    )
 
-    // Consider each enabled stage in order. The first one that
-    // matches wins (a single contact never gets two templates in
-    // one cron run — the second stage will fire on a later run
-    // once its own window opens for THAT contact).
-    for (const stage of stages) {
-      const alreadySent =
-        stage.key === 'stage_1'
-          ? row.re_engagement_stage_1_at != null
-          : row.re_engagement_stage_2_at != null
-      if (alreadySent) continue
-      if (hoursSince < stage.hoursMin) continue
-      if (hoursSince >= stage.hoursMax) continue
+    const now = Date.now()
 
-      attempted.push({ contact_id: contactId, stage: stage.key })
-      try {
-        if (stage.templateType === 'carousel') {
-          const cards = await buildProductCarouselCards(db, accountId)
-          if (cards.length < 2) {
-            // Not enough eligible products to fill a carousel —
-            // fail this contact for this run rather than sending a
-            // malformed template. Don't stamp the timestamp so it
-            // gets retried on the next run once inventory allows.
-            throw new Error('carousel needs ≥2 products with images; none found')
+    for (const contact of contacts) {
+      if (attempted >= batchSize) break
+
+      // Most-recent conversation for this contact.
+      const { data: recentConv } = await db
+        .from('conversations')
+        .select('id')
+        .eq('contact_id', contact.id)
+        .eq('account_id', accountId)
+        .order('last_message_at', { ascending: false, nullsFirst: false })
+        .limit(1)
+        .maybeSingle()
+      if (!recentConv) continue
+      const conversationId = (recentConv as { id: string }).id
+
+      // Last customer-sent message on that thread.
+      const { data: lastInbound } = await db
+        .from('messages')
+        .select('created_at')
+        .eq('conversation_id', conversationId)
+        .eq('sender_type', 'customer')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (!lastInbound) continue
+      const hoursSince =
+        (now - new Date((lastInbound as { created_at: string }).created_at).getTime()) /
+        (60 * 60 * 1000)
+      if (hoursSince >= maxAgeHours) continue
+
+      // Iterate stages ascending — first match wins.
+      for (const stage of accountStages) {
+        if (hoursSince < stage.hours_after) continue
+        if (sentSet.has(`${contact.id}:${stage.id}`)) continue
+
+        attempted += 1
+        try {
+          if (stage.template_type === 'carousel') {
+            const cards = await buildProductCarouselCards(db, accountId)
+            if (cards.length < 2) {
+              throw new Error('carousel needs ≥2 products with images')
+            }
+            await engineSendCarouselTemplate({
+              accountId,
+              userId: '',
+              conversationId,
+              contactId: contact.id,
+              templateName: stage.template_name,
+              language: stage.template_language,
+              bodyParams: ['there'],
+              cards,
+              summaryText: `Re-engagement carousel (${stage.name}): ${cards.length} products`,
+            })
+          } else {
+            await sendMessageToConversation(db, accountId, {
+              conversationId,
+              messageType: 'template',
+              templateName: stage.template_name,
+              templateLanguage: stage.template_language,
+              templateParams: [],
+            })
           }
-          await engineSendCarouselTemplate({
-            accountId,
-            userId: '',
-            conversationId,
-            contactId,
-            templateName: stage.templateName,
-            language: templateLang,
-            bodyParams: ['there'],
-            cards,
-            summaryText: `Re-engagement carousel (${stage.key}): ${cards.length} products`,
+          await db.from('contact_re_engagement_sends').insert({
+            contact_id: contact.id,
+            stage_id: stage.id,
+            account_id: accountId,
+            sent_at: nowIso,
           })
-        } else {
-          await sendMessageToConversation(db, accountId, {
-            conversationId,
-            messageType: 'template',
-            templateName: stage.templateName,
-            templateLanguage: templateLang,
-            templateParams: [],
-          })
+          sent += 1
+          perStageSent[stage.id] = (perStageSent[stage.id] ?? 0) + 1
+        } catch (err) {
+          failed += 1
+          console.warn(
+            `[re-engagement] send failed contact=${contact.id} stage=${stage.id} (${stage.name}):`,
+            err instanceof Error ? err.message : err,
+          )
         }
-        await db
-          .from('contacts')
-          .update({ [stage.timestampColumn]: nowIso })
-          .eq('id', contactId)
-          .eq('account_id', accountId)
-        sent += 1
-        perStageSent[stage.key] = (perStageSent[stage.key] ?? 0) + 1
-      } catch (err) {
-        failed += 1
-        console.warn(
-          `[re-engagement] send failed contact=${contactId} stage=${stage.key}:`,
-          err instanceof Error ? err.message : err,
-        )
+        break // one stage per contact per cron run
       }
-      break // one stage per contact per cron run
     }
   }
 
   return NextResponse.json({
-    candidates: attempted.length,
+    candidates: attempted,
     sent,
     failed,
+    stages: stages.length,
+    accounts: stagesByAccount.size,
     perStageSent,
-    stages: stages.map((s) => ({
-      key: s.key,
-      template: s.templateName,
-      type: s.templateType,
-      window_hours: [s.hoursMin, s.hoursMax],
-    })),
   })
 }

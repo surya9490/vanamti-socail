@@ -1,15 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Bot, Sparkles, Settings2, BarChart3 } from 'lucide-react';
+import { Bot, Sparkles, Settings2, BarChart3, Timer } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { AiPlayground } from '@/components/agents/ai-playground';
 import { AiUsageCard } from '@/components/agents/ai-usage';
 import { AiConfig } from '@/components/settings/ai-config';
+import { ReEngagementConfig } from '@/components/agents/re-engagement-config';
 import { useAuth } from '@/hooks/use-auth';
 import { canEditSettings } from '@/lib/auth/roles';
 
-type Tab = 'playground' | 'setup' | 'usage';
+type Tab = 'playground' | 'setup' | 'reengagement' | 'usage';
 
 export default function AgentsPage() {
   const { accountRole } = useAuth();
@@ -62,6 +63,9 @@ export default function AgentsPage() {
             <TabsTrigger value="setup">
               <Settings2 className="mr-1.5 h-4 w-4" /> Setup
             </TabsTrigger>
+            <TabsTrigger value="reengagement">
+              <Timer className="mr-1.5 h-4 w-4" /> Re-engagement
+            </TabsTrigger>
             {canViewUsage && (
               <TabsTrigger value="usage">
                 <BarChart3 className="mr-1.5 h-4 w-4" /> Usage
@@ -75,6 +79,10 @@ export default function AgentsPage() {
 
           <TabsContent value="setup" className="mt-4">
             <AiConfig />
+          </TabsContent>
+
+          <TabsContent value="reengagement" className="mt-4">
+            <ReEngagementConfig />
           </TabsContent>
 
           {canViewUsage && (
