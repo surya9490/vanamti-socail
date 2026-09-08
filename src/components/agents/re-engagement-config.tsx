@@ -414,7 +414,7 @@ export function ReEngagementConfig() {
                   />
                   <p className="mt-1 text-xs text-muted-foreground">
                     Plain text sent as-is. Max 1000 chars. No variables. Include
-                    "Reply STOP to opt out" — required for re-engagement messages.
+                    &ldquo;Reply STOP to opt out&rdquo; — required for re-engagement messages.
                   </p>
                 </div>
               ) : null}
@@ -645,7 +645,7 @@ function StageRow({
       {IN_SESSION_TYPES.includes(stage.template_type) &&
       stage.hours_after >= SESSION_WINDOW_HOURS ? (
         <p className="mt-3 text-xs text-amber-700 dark:text-amber-400">
-          ⚠ This type only works within 24h of the customer's last message. Drop
+          ⚠ This type only works within 24h of the customer&apos;s last message. Drop
           hours below 24 or switch to a template type.
         </p>
       ) : null}
