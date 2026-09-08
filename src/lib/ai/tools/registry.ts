@@ -31,9 +31,20 @@ export interface ToolContext {
  * OpenAI's `parameters`) expect — a JSON-schema subset with uppercase
  * type names.
  */
+/** JSON-schema-lite for one parameter. ARRAY takes `items` (nested
+ *  schema); OBJECT takes `properties`. Kept permissive because the
+ *  three providers (Gemini/OpenAI/Anthropic) each accept slightly
+ *  different shapes and we hand this dict through as-is. */
+export interface ToolParameterSchema {
+  type: string
+  description?: string
+  items?: ToolParameterSchema
+  properties?: Record<string, ToolParameterSchema>
+}
+
 export interface ToolParameters {
   type: 'OBJECT'
-  properties: Record<string, { type: string; description?: string }>
+  properties: Record<string, ToolParameterSchema>
   required?: string[]
 }
 
