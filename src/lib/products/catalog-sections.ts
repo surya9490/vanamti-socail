@@ -24,6 +24,8 @@ interface ProductRow {
   shop_product_id: string
   variants?: ProductVariant[] | null
   title: string
+  image_url?: string | null
+  price_min?: number | null
 }
 
 export async function buildProductCatalogRetailerIds(
@@ -31,28 +33,61 @@ export async function buildProductCatalogRetailerIds(
   accountId: string,
   maxProducts = META_MAX_PRODUCTS,
 ): Promise<string[]> {
+  const { retailerIds } = await buildProductCatalog(db, accountId, maxProducts)
+  return retailerIds
+}
+
+/**
+ * Enriched variant of buildProductCatalogRetailerIds — returns both
+ * the retailer_ids (what Meta needs) AND a metadata map keyed by
+ * those retailer_ids (title/price/image, what the inbox needs to
+ * render the sent catalog bubble). Same product picking rules.
+ */
+export interface CatalogPreviewMeta {
+  title: string | null
+  price: number | null
+  currency: string | null
+  imageUrl: string | null
+}
+
+export async function buildProductCatalog(
+  db: SupabaseClient,
+  accountId: string,
+  maxProducts = META_MAX_PRODUCTS,
+): Promise<{
+  retailerIds: string[]
+  meta: Record<string, CatalogPreviewMeta>
+}> {
   const limit = Math.max(1, Math.min(maxProducts, META_MAX_PRODUCTS))
   const { data, error } = await db
     .from('products')
-    .select('shop_product_id, variants, title')
+    .select('shop_product_id, variants, title, image_url, price_min')
     .eq('account_id', accountId)
     .eq('is_active', true)
     .order('title', { ascending: true })
     .limit(limit)
   if (error) {
     console.warn('[catalog-sections] product query failed:', error)
-    return []
+    return { retailerIds: [], meta: {} }
   }
   const rows = (data ?? []) as ProductRow[]
   const prefix = process.env.WHATSAPP_CATALOG_RETAILER_ID_PREFIX ?? ''
-  return rows
-    .map((p) => {
-      const variants = Array.isArray(p.variants) ? p.variants : []
-      const cheapest = [...variants]
-        .filter((v) => v && v.id)
-        .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))[0]
-      return cheapest?.id ?? null
-    })
-    .filter((id): id is string => Boolean(id))
-    .map((id) => `${prefix}${id}`)
+  const retailerIds: string[] = []
+  const meta: Record<string, CatalogPreviewMeta> = {}
+  for (const p of rows) {
+    const variants = Array.isArray(p.variants) ? p.variants : []
+    const cheapest = [...variants]
+      .filter((v) => v && v.id)
+      .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))[0]
+    if (!cheapest?.id) continue
+    const retailerId = `${prefix}${cheapest.id}`
+    retailerIds.push(retailerId)
+    meta[retailerId] = {
+      title: p.title ?? null,
+      price: cheapest.price ?? p.price_min ?? null,
+      currency: 'INR',
+      imageUrl: p.image_url ?? null,
+    }
+  }
+  return { retailerIds, meta }
 }

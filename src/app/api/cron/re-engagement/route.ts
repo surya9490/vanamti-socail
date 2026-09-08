@@ -7,7 +7,7 @@ import {
   engineSendProductList,
 } from '@/lib/flows/meta-send'
 import { buildProductCarouselCards } from '@/lib/products/carousel-cards'
-import { buildProductCatalogRetailerIds } from '@/lib/products/catalog-sections'
+import { buildProductCatalog } from '@/lib/products/catalog-sections'
 
 const SESSION_WINDOW_HOURS = 24
 
@@ -231,10 +231,8 @@ export async function GET(request: Request): Promise<Response> {
             if (!catalogId) {
               throw new Error('WHATSAPP_CATALOG_ID not set — catalog stage cannot fire')
             }
-            const productRetailerIds = await buildProductCatalogRetailerIds(
-              db,
-              accountId,
-            )
+            const { retailerIds: productRetailerIds, meta: previewProducts } =
+              await buildProductCatalog(db, accountId)
             if (productRetailerIds.length === 0) {
               throw new Error('no active products with variants to send')
             }
@@ -251,6 +249,7 @@ export async function GET(request: Request): Promise<Response> {
               sections: [
                 { title: 'Featured', productRetailerIds },
               ],
+              previewProducts,
             })
           } else if (stage.template_type === 'freeform_text') {
             const bodyText = (stage.custom_text ?? '').trim()

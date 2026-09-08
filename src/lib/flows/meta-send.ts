@@ -306,6 +306,17 @@ export interface SendProductListEngineArgs {
   }>
   headerText?: string
   footerText?: string
+  /**
+   * Optional per-product metadata (title/price/image) parallel to
+   * `sections[*].productRetailerIds`. When provided, the sent
+   * message is persisted with a `product_list` interactive_payload
+   * so the inbox bubble can render what the customer saw. When
+   * omitted, we fall back to the plain content_text summary.
+   */
+  previewProducts?: Record<
+    string,
+    { title?: string | null; price?: number | null; currency?: string | null; imageUrl?: string | null }
+  >
 }
 
 export interface SendCarouselTemplateEngineArgs {
@@ -568,11 +579,33 @@ export async function engineSendProductList(
     await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
   }
 
-  // Store as interactive message; the content_text is the body so
-  // the inbox preview + conversation-list have a readable summary.
-  // We don't serialize the full product_list payload into
-  // interactive_payload — the inbox renderer doesn't know
-  // product_list yet, so let it fall back to the plain-text body.
+  // Build the interactive_payload so the inbox bubble can render
+  // what the customer actually saw (title/price per product card).
+  // Falls back to plain body text when the caller didn't pass
+  // previewProducts (old call sites still work).
+  const meta = args.previewProducts ?? {}
+  const previewSections = args.sections.map((s) => ({
+    title: s.title,
+    products: s.productRetailerIds.map((rid) => {
+      const info = meta[rid]
+      return {
+        retailer_id: rid,
+        title: info?.title ?? null,
+        price: info?.price ?? null,
+        currency: info?.currency ?? null,
+        image_url: info?.imageUrl ?? null,
+      }
+    }),
+  }))
+  const interactivePayload = {
+    kind: 'product_list' as const,
+    body: args.bodyText,
+    header: args.headerText,
+    footer: args.footerText,
+    catalog_id: args.catalogId,
+    sections: previewSections,
+  }
+
   const { error: msgErr } = await db.from('messages').insert({
     conversation_id: args.conversationId,
     sender_type: 'bot',
@@ -581,6 +614,7 @@ export async function engineSendProductList(
     message_id: waMessageId,
     status: 'sent',
     ai_generated: true,
+    interactive_payload: interactivePayload,
   })
   if (msgErr) {
     throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)

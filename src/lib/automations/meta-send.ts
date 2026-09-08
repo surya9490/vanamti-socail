@@ -95,14 +95,24 @@ export async function engineSendInteractive(
       buttons: payload.buttons,
     })
   }
-  return engineSendInteractiveList({
-    ...common,
-    bodyText: payload.body,
-    buttonLabel: payload.button_label,
-    headerText: payload.header,
-    footerText: payload.footer,
-    sections: payload.sections,
-  })
+  if (payload.kind === 'list') {
+    return engineSendInteractiveList({
+      ...common,
+      bodyText: payload.body,
+      buttonLabel: payload.button_label,
+      headerText: payload.header,
+      footerText: payload.footer,
+      sections: payload.sections,
+    })
+  }
+  // product_list is not sent from the automation runner today —
+  // the AI's send_product_catalog tool and re-engagement cron both
+  // call engineSendProductList directly with the enriched preview
+  // shape, so an automation shouldn't reach this branch. If someone
+  // pipes one in later, wire it here.
+  throw new Error(
+    `Unsupported interactive payload kind for automation send: ${payload.kind}`,
+  )
 }
 
 type SendInput =

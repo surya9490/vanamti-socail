@@ -379,18 +379,28 @@ export async function sendMessageToConversation(
         });
         return result.messageId;
       }
-      const result = await sendInteractiveList({
-        phoneNumberId: config.phone_number_id,
-        accessToken,
-        to: phone,
-        bodyText: p.body,
-        buttonLabel: p.button_label,
-        headerText: p.header || undefined,
-        footerText: p.footer || undefined,
-        sections: p.sections,
-        contextMessageId,
-      });
-      return result.messageId;
+      if (p.kind === 'list') {
+        const result = await sendInteractiveList({
+          phoneNumberId: config.phone_number_id,
+          accessToken,
+          to: phone,
+          bodyText: p.body,
+          buttonLabel: p.button_label,
+          headerText: p.header || undefined,
+          footerText: p.footer || undefined,
+          sections: p.sections,
+          contextMessageId,
+        });
+        return result.messageId;
+      }
+      // product_list — the AI catalog tool and re-engagement cron
+      // don't route through this generic sender; they call
+      // engineSendProductList directly. Refuse here so a stray
+      // sendMessageToConversation for a product_list gives a clear
+      // error instead of silently mis-sending as a list.
+      throw new Error(
+        `sendMessageToConversation cannot send interactive kind "${p.kind}" — use engineSendProductList directly.`,
+      );
     }
     const result = await sendTextMessage({
       phoneNumberId: config.phone_number_id,

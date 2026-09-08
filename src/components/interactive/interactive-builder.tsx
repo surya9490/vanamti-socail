@@ -149,8 +149,14 @@ export function InteractiveBuilder({
 
           {value.kind === "buttons" ? (
             <ButtonsEditor value={value} onChange={onChange} advanced={advanced} />
-          ) : (
+          ) : value.kind === "list" ? (
             <ListEditor value={value} onChange={onChange} advanced={advanced} />
+          ) : (
+            // product_list is constructed by the AI catalog tool /
+            // re-engagement cron — no manual builder UI for it.
+            <p className="text-xs text-muted-foreground">
+              Product-catalog messages are sent by automations, not built here.
+            </p>
           )}
 
           <label className="flex items-center gap-2 text-xs text-muted-foreground">

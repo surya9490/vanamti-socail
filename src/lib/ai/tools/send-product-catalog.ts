@@ -1,6 +1,6 @@
 import type { AiTool } from './registry'
 import { engineSendProductList } from '@/lib/flows/meta-send'
-import { buildProductCatalogRetailerIds } from '@/lib/products/catalog-sections'
+import { buildProductCatalog } from '@/lib/products/catalog-sections'
 
 // ============================================================
 // send_product_catalog tool — sends a native WhatsApp Multi-Product
@@ -78,13 +78,12 @@ export const sendProductCatalogTool: AiTool = {
         ? args.header_text.trim()
         : undefined
 
-    // Shared helper: same list the re-engagement cron sends when
-    // running a stage of type='catalog'.
-    const productRetailerIds = await buildProductCatalogRetailerIds(
-      ctx.db,
-      ctx.accountId,
-      MAX_PRODUCTS,
-    )
+    // Shared helper: same products the re-engagement cron sends
+    // when running a stage of type='catalog'. Returns both the
+    // retailer_ids (what Meta needs) AND per-product metadata
+    // (title/price/image) for the inbox preview payload.
+    const { retailerIds: productRetailerIds, meta: previewProducts } =
+      await buildProductCatalog(ctx.db, ctx.accountId, MAX_PRODUCTS)
     if (productRetailerIds.length === 0) return MISSING_PRODUCTS
 
     console.log(
@@ -105,6 +104,7 @@ export const sendProductCatalogTool: AiTool = {
             productRetailerIds,
           },
         ],
+        previewProducts,
       })
       return `Product catalogue sent to the customer with ${productRetailerIds.length} products. Do NOT list the same products again in your reply — the catalog IS the reply. A short acknowledgement is enough.`
     } catch (err) {

@@ -68,9 +68,43 @@ export interface InteractiveListPayload {
   sections: InteractiveListSection[]
 }
 
+/**
+ * Preview-only shape for a Multi-Product Message (Path A catalog).
+ * The wire message to Meta carries just product_retailer_ids; this
+ * payload additionally carries title/price/image for each product so
+ * the inbox bubble can render what the customer actually saw.
+ *
+ * Fetched from the account's products cache at send time — the
+ * `retailer_id` is the Shopify VARIANT id (possibly with the
+ * WHATSAPP_CATALOG_RETAILER_ID_PREFIX), same value we send Meta.
+ */
+export interface InteractiveProductListProduct {
+  retailer_id: string
+  title?: string | null
+  price?: number | null
+  currency?: string | null
+  image_url?: string | null
+}
+
+export interface InteractiveProductListSection {
+  title?: string
+  products: InteractiveProductListProduct[]
+}
+
+export interface InteractiveProductListPayload {
+  kind: 'product_list'
+  body: string
+  header?: string
+  footer?: string
+  /** Meta catalog id the products came from — stored for audit only. */
+  catalog_id?: string
+  sections: InteractiveProductListSection[]
+}
+
 export type InteractiveMessagePayload =
   | InteractiveButtonsPayload
   | InteractiveListPayload
+  | InteractiveProductListPayload
 
 export type InteractiveValidation =
   | { ok: true }
@@ -223,6 +257,24 @@ export function validateInteractivePayload(
     return ok()
   }
 
+  if (p.kind === 'product_list') {
+    // product_list is builder-write-only in the sense that WACRM
+    // constructs it from the products cache when calling the AI
+    // tool / re-engagement cron — there's no manual composer that
+    // hands us raw user input. Keep validation lean: non-empty
+    // sections + at least one product per section.
+    const pl = p as InteractiveProductListPayload
+    if (!Array.isArray(pl.sections) || pl.sections.length === 0) {
+      return fail('Product list needs at least one section.')
+    }
+    for (const s of pl.sections) {
+      if (!s || !Array.isArray(s.products) || s.products.length === 0) {
+        return fail('Every product-list section needs at least one product.')
+      }
+    }
+    return ok()
+  }
+
   return fail('Interactive message must be reply buttons or a list.')
 }
 
@@ -235,5 +287,7 @@ export function interactivePayloadPreviewText(
 ): string {
   const body = payload.body?.trim()
   if (body) return body
-  return payload.kind === 'buttons' ? '[buttons]' : '[list]'
+  if (payload.kind === 'buttons') return '[buttons]'
+  if (payload.kind === 'list') return '[list]'
+  return '[product catalog]'
 }
