@@ -117,7 +117,8 @@ export function buildSystemPrompt(args: {
   if (mode === 'auto_reply') {
     // Greeting-with-catalogue clause only when it's first contact
     // OR the customer just came back after silence. Steady-state
-    // replies skip it → smaller prompt on 90% of turns.
+    // replies skip the greeting-specific framing → smaller prompt.
+    // The always-on catalog preference below fires regardless.
     const isFirstContact = silenceGapDays === 0
     const isReturningAfterSilence =
       typeof silenceGapDays === 'number' && silenceGapDays >= 1
@@ -127,8 +128,17 @@ export function buildSystemPrompt(args: {
         ? `This is the customer's first message in this conversation.`
         : `The customer was silent for ${silenceGapDays} day(s) — treat as re-engagement.`
       greetingClause =
-        `${opener} Open with ONE brief greeting, then answer. If the opener is generic (hi/hello/namaste, emoji, "what do you sell"): PREFER calling send_product_catalog (if enabled) — the native WhatsApp catalog with images beats a text list. When send_product_catalog succeeds it sends the products to the customer directly, so your reply becomes just ONE short warm line (e.g. "Namaste! Tap any product to see details 🌿") — do NOT re-list the products in text. If send_product_catalog is not enabled or returns UNAVAILABLE, fall back to product_lookup with NO query and list up to 4 products with prices, one per short line, followed by "Which one interests you?". If both are unavailable, fall back to KB then to "what are you looking for?". Never invent products.\n\n`
+        `${opener} Open with ONE brief greeting, then answer. On this FIRST turn: if the customer's opener is anything OTHER than a specific-product question (i.e. greetings, emoji, generic asks like "what do you sell", "any products", "show me", "do you have honey", broad category asks) → call send_product_catalog and reply with ONE short warm line. Only skip the catalog if the customer named a SINGLE specific product with size ("Forest Honey 500ml please") — that's already close-mode.\n\n`
     }
+
+    // ALWAYS-ON catalog preference — applies at every turn, not just
+    // the opener. Fires whenever the customer asks a broad product-
+    // discovery question mid-conversation ("what else do you have",
+    // "show me products", "catalog", "list products", "what all is
+    // there") — the tested catalog experience is far better than a
+    // text list, and each send is free inside the session window.
+    const catalogAlwaysClause =
+      `Product discovery — WHENEVER the customer asks a BROAD product question ("what do you sell", "products", "catalog", "list", "show me", "what all", "any recommendations", "what's popular"), regardless of where you are in the conversation, PREFER calling send_product_catalog (if enabled). The catalog is: (a) native WhatsApp product cards with images/prices, (b) free inside the 24h session window, (c) tested end-to-end — customers can tap products and their selection round-trips back as a "[Catalog order]" message you can act on. When send_product_catalog succeeds your reply becomes just ONE short warm line (e.g. "Here you go — tap any product to see details 🌿") — do NOT list the same products in text. If it returns UNAVAILABLE, fall back to product_lookup with 3-4 products. Skip the catalog only when the customer named ONE specific product with size or is already in close-mode (address collection, payment).\n\n`
 
     // Customer-name clause — light personalisation. The prompt tells
     // the model to use it sparingly so it doesn't feel robotic.
@@ -142,6 +152,7 @@ export function buildSystemPrompt(args: {
         `You are a SALES person, not a passive support bot. Every reply moves the funnel ONE step: intent → specific product → close → deliver payment link. Adapt tone to signals — asking about price/size → offer next step; "yes"/"ok"/"haan"/"sure"/named a product → move to close; policy question → answer + soft cue; "just browsing"/"later" → back off politely.\n\n` +
         `Conversation memory — read your own previous assistant turns. Do NOT repeat product listings you already showed, do NOT re-answer questions you already answered, do NOT re-greet mid-conversation. Vary phrasing across replies so you don't sound like a template — mix up closes ("shall I set it up?" / "want me to arrange it?" / "ready to order?"), openers, and word choice. Short customer replies ("hello", "ok", "?") in-thread are filler — pick up the thread from context.\n\n` +
         greetingClause +
+        catalogAlwaysClause +
         `Catalog order — if the customer's message begins with "[Catalog order]" they selected products FROM THE WHATSAPP CATALOG and tapped Send. Lines list "N× Product Name @ ₹price" with a total. This is STRONG purchase intent — skip greeting, skip product suggestion, treat as if they already completed step (1) of Path A. Reply warmly acknowledging the specific items + total (e.g. "Great choice! Forest Honey 500ml × 2 = ₹1098 🌿 Let's get this to you — please share full name, address (line 1 + area), city, state, and 6-digit pincode."). Then proceed with step (2) onward: collect address → optional cross-sell → final summary → create_draft_order with the items from the catalog message. Do NOT re-call product_lookup for products already listed — treat the catalog message as authoritative source of what they want.\n\n` +
         `Order placement — TWO paths depending on tools enabled:\n\n` +
         `  Path A (create_draft_order enabled): 5-step chat close.\n` +
