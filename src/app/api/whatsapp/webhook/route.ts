@@ -68,6 +68,23 @@ interface WhatsAppMessage {
    * payload and mirrors the label into it).
    */
   button?: { text?: string; payload?: string }
+  /**
+   * Present when the customer selects products in a Multi-Product
+   * Message (WhatsApp Commerce catalog) and taps "Send". Meta wraps
+   * their selection here — product_retailer_id matches the ids we
+   * sent in the section, plus qty + item_price + currency snapshot.
+   * `text` is an optional customer note attached to the order.
+   */
+  order?: {
+    catalog_id?: string
+    text?: string
+    product_items: Array<{
+      product_retailer_id: string
+      quantity: number
+      item_price: number
+      currency: string
+    }>
+  }
   /** Present when the customer swipe-replies to one of our messages. */
   context?: { id: string }
 }
@@ -1108,6 +1125,104 @@ async function parseMessageContent(
         }
       }
       return { ...empty, contentText: '[Interactive reply]' }
+    }
+
+    case 'order': {
+      // Customer tapped products in a Multi-Product Message (Path A
+      // catalog) and hit "Send". Meta wraps their selection under
+      // `order` with `product_items[]`. Without this case the payload
+      // fell through to `default` and landed in the inbox as
+      // "[Unsupported message type: order]" — losing REAL purchase
+      // intent (name, quantity, price, catalog id, optional note).
+      //
+      // We format a human-readable summary as contentText so:
+      //   1. The inbox bubble shows what they picked.
+      //   2. `dispatchInboundToAiReply` sees non-empty text and
+      //      triggers the AI — which can then reply + call
+      //      create_draft_order to convert into a Shopify order.
+      //
+      // Product titles are looked up from the account's product cache
+      // (populated by the Vanamati Shopify sync). If the lookup fails
+      // — new product, dropped cache — we fall back to raw retailer
+      // ids so the AI still sees something structured.
+      const order = message.order
+      const items = Array.isArray(order?.product_items)
+        ? order!.product_items
+        : []
+      if (items.length === 0) {
+        return {
+          ...empty,
+          contentText: '[Catalog order — no items]',
+        }
+      }
+
+      // Resolve product_retailer_id (Shopify variant id, possibly
+      // prefixed — see WHATSAPP_CATALOG_RETAILER_ID_PREFIX) back to
+      // the product title from our cache. Strip the prefix before
+      // matching against the variant.id values in the JSONB column.
+      const prefix = process.env.WHATSAPP_CATALOG_RETAILER_ID_PREFIX ?? ''
+      const rawVariantIds = items
+        .map((i) =>
+          prefix && i.product_retailer_id?.startsWith(prefix)
+            ? i.product_retailer_id.slice(prefix.length)
+            : i.product_retailer_id,
+        )
+        .filter((v): v is string => Boolean(v))
+
+      const titleByVariantId = new Map<string, string>()
+      if (mirror?.accountId && rawVariantIds.length > 0) {
+        const { data: prods } = await supabaseAdmin()
+          .from('products')
+          .select('title, variants')
+          .eq('account_id', mirror.accountId)
+          .eq('is_active', true)
+        for (const p of (prods ?? []) as {
+          title: string
+          variants?: Array<{ id?: string; title?: string }> | null
+        }[]) {
+          const vs = Array.isArray(p.variants) ? p.variants : []
+          for (const v of vs) {
+            if (v?.id && rawVariantIds.includes(v.id)) {
+              const label = v.title && v.title !== 'Default Title'
+                ? `${p.title} (${v.title})`
+                : p.title
+              titleByVariantId.set(v.id, label)
+            }
+          }
+        }
+      }
+
+      let total = 0
+      const lines: string[] = []
+      for (const item of items) {
+        const rawId =
+          prefix && item.product_retailer_id?.startsWith(prefix)
+            ? item.product_retailer_id.slice(prefix.length)
+            : item.product_retailer_id
+        const name = titleByVariantId.get(rawId ?? '') ?? rawId ?? 'Unknown item'
+        const qty = Number(item.quantity) || 1
+        const price = Number(item.item_price) || 0
+        const currency = item.currency || 'INR'
+        const subtotal = qty * price
+        total += subtotal
+        const priceStr = price
+          ? ` @ ${currency === 'INR' ? '₹' : currency + ' '}${price}`
+          : ''
+        lines.push(`- ${qty}× ${name}${priceStr}`)
+      }
+      const currency = items[0]?.currency || 'INR'
+      const totalStr = total
+        ? `\nTotal: ${currency === 'INR' ? '₹' : currency + ' '}${total.toFixed(2)}`
+        : ''
+      const note = order?.text?.trim()
+      const noteStr = note ? `\nCustomer note: ${note}` : ''
+
+      return {
+        ...empty,
+        // Structured prefix "[Catalog order]" makes it trivial for the
+        // AI prompt to recognise this and route to create_draft_order.
+        contentText: `[Catalog order]\n${lines.join('\n')}${totalStr}${noteStr}`,
+      }
     }
 
     case 'button': {
