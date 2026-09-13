@@ -187,7 +187,7 @@ export async function dispatchInboundToAiReply(
     let silenceGapDays: number | null = null
     const { data: recentInbounds } = await db
       .from('messages')
-      .select('created_at')
+      .select('created_at, content_type, content_text')
       .eq('conversation_id', conversationId)
       .eq('sender_type', 'customer')
       .order('created_at', { ascending: false })
@@ -269,6 +269,106 @@ export async function dispatchInboundToAiReply(
           return
         }
       }
+    }
+
+    // Media-inbound handoff — the AI is text-only (no vision).
+    // If the customer's MOST RECENT message is a photo, video, doc,
+    // voice note, or sticker, the model has zero context on what it
+    // shows and any text reply is a guess. Instead: acknowledge to
+    // the customer, pause AI, and hand off to a human. Applies even
+    // if the media has a caption — the caption without the image
+    // (e.g. "look at this ↑") is meaningless too.
+    //
+    // Runs BEFORE the token-budget check so this handoff is free
+    // (no provider call, no tokens billed). Uses `recentInbounds`
+    // which we already fetched for silence-gap detection.
+    const MEDIA_TYPES = new Set([
+      'image',
+      'video',
+      'document',
+      'audio',
+      'sticker',
+    ])
+    const latestInbound = recentInbounds?.[0] as
+      | { content_type?: string; content_text?: string | null }
+      | undefined
+    const latestType = latestInbound?.content_type
+    if (latestType && MEDIA_TYPES.has(latestType)) {
+      const mediaLabel =
+        latestType === 'image'
+          ? 'photo'
+          : latestType === 'video'
+            ? 'video'
+            : latestType === 'audio'
+              ? 'voice note'
+              : latestType === 'document'
+                ? 'document'
+                : 'attachment'
+
+      log.info('auto_reply.media_handoff', {
+        trace_id,
+        conversation_id: conversationId,
+        contact_id: contactId,
+        media_type: latestType,
+      })
+
+      // Friendly ACK so the customer knows their message landed
+      // and someone's coming — better than silence until an agent
+      // notices the inbox. Wrapped in try/catch: even if the ACK
+      // fails to send, the handoff still executes.
+      try {
+        await engineSendText({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId,
+          contactId,
+          text: `Thanks for sharing the ${mediaLabel}! Our team will take a look and get back to you shortly 🙏`,
+          aiGenerated: true,
+        })
+      } catch (err) {
+        console.warn('[ai auto-reply] media ACK send failed:', err)
+      }
+
+      const summary = `🤖 Customer sent a ${mediaLabel} — AI can't interpret images/media, handed off for human review.`
+      const update: Record<string, unknown> = {
+        ai_autoreply_disabled: true,
+        ai_autoreply_disabled_at: new Date().toISOString(),
+        ai_handoff_summary: summary,
+      }
+      if (config.handoffAgentId && !conv.assigned_agent_id) {
+        update.assigned_agent_id = config.handoffAgentId
+      }
+      await db.from('conversations').update(update).eq('id', conversationId)
+
+      // Slack notification — same shape as the model-driven handoff.
+      try {
+        const { data: contact } = await db
+          .from('contacts')
+          .select('name, phone')
+          .eq('id', contactId)
+          .maybeSingle()
+        const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || '').replace(
+          /\/+$/,
+          '',
+        )
+        const inboxUrl = baseUrl
+          ? `${baseUrl}/inbox?c=${conversationId}`
+          : null
+        await postSlackNotification(
+          buildHandoffSlackMessage({
+            contactName:
+              (contact as { name?: string | null } | null)?.name ?? null,
+            contactPhone:
+              (contact as { phone?: string | null } | null)?.phone ?? null,
+            lastCustomerMessage: `[${mediaLabel}]`,
+            handoffSummary: summary,
+            inboxUrl,
+          }),
+        )
+      } catch (err) {
+        console.warn('[ai auto-reply] slack media-handoff notify failed:', err)
+      }
+      return
     }
 
     // Per-contact daily token budget — guards against runaway spend
