@@ -87,8 +87,28 @@ export async function GET(request: Request): Promise<Response> {
   const staleCutoff = new Date(now.getTime() - maxStaleHours * 60 * 60 * 1000)
 
   // ------------------------------------------------------------
-  // Fetch the most recent BOT text messages within the stale
-  // window. Over-fetches because we then per-row check that:
+  // 1. Bulk-fetch every message_id we've already used as a NUDGE
+  //    inside the stale window. Nudges are bot messages that
+  //    themselves contain stage-triggering language ("share your
+  //    name, address..."), so without this exclusion the cron
+  //    treats each nudge as a fresh trigger and loops indefinitely.
+  //    Live incident: bot spammed the same nudge every ~2min
+  //    because nudge N spawned nudge N+1 as its own trigger.
+  // ------------------------------------------------------------
+  const { data: nudgeRows } = await db
+    .from('conversation_close_nudges')
+    .select('message_id')
+    .gte('sent_at', staleCutoff.toISOString())
+  const nudgeMessageIds = new Set(
+    ((nudgeRows ?? []) as { message_id: string | null }[])
+      .map((r) => r.message_id)
+      .filter((id): id is string => Boolean(id)),
+  )
+
+  // ------------------------------------------------------------
+  // 2. Fetch the most recent BOT text messages within the stale
+  //    window. Over-fetches because we then per-row check that:
+  //   * this message isn't itself a nudge we sent,
   //   * no newer customer message exists,
   //   * this bot message is the LATEST message in its
   //     conversation (i.e. no even-newer bot message either), and
@@ -111,9 +131,12 @@ export async function GET(request: Request): Promise<Response> {
 
   // De-dupe by conversation_id — first (newest) bot message per
   // conv wins; older ones are for stages that already passed.
+  // Also SKIP any message that's a nudge we already sent (defense
+  // against the self-trigger loop).
   const seenConvs = new Set<string>()
   const candidateBotMsgs: RecentBotRow[] = []
   for (const row of botMsgs) {
+    if (nudgeMessageIds.has(row.id)) continue
     if (seenConvs.has(row.conversation_id)) continue
     seenConvs.add(row.conversation_id)
     candidateBotMsgs.push(row)
@@ -173,7 +196,30 @@ export async function GET(request: Request): Promise<Response> {
       continue
     }
 
-    // Timing check + nudge-count check.
+    // Per-conversation HARD CAP (belt-and-braces). Regardless of
+    // stage or which bot message triggered them, never send more
+    // than CONVERSATION_MAX_NUDGES follow-ups to any one contact
+    // inside any 6h window. Protects against future regex slips or
+    // corrupted ledger rows re-triggering endlessly — as happened
+    // once when the address-ask regex matched the nudge's own
+    // paraphrase.
+    const CONVERSATION_MAX_NUDGES = 3
+    const capCutoff = new Date(now.getTime() - 6 * 60 * 60 * 1000).toISOString()
+    const { count: totalRecentNudges } = await db
+      .from('conversation_close_nudges')
+      .select('id', { count: 'exact', head: true })
+      .eq('conversation_id', c.id)
+      .gte('sent_at', capCutoff)
+    if ((totalRecentNudges ?? 0) >= CONVERSATION_MAX_NUDGES) {
+      console.log(
+        `[close-nudge] conv=${c.id} hit hard cap (${totalRecentNudges}/${CONVERSATION_MAX_NUDGES}) — skip`,
+      )
+      skipped += 1
+      continue
+    }
+
+    // Per-triggering-bot-message stage cap (the primary counter —
+    // 2 nudges per stage).
     const { data: nudgeRows } = await db
       .from('conversation_close_nudges')
       .select('nudge_number, sent_at')

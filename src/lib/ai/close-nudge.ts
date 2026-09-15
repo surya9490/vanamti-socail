@@ -79,10 +79,15 @@ const ADDRESS_CONFIRM_RE =
   /(confirm(?:ing)? your (?:full delivery |order|)|let me confirm your|ready (?:for me )?to (?:create|send) (?:your )?payment link)/i
 
 // The AI prompt asks the model to collect "full name, address (line
-// 1 + area), city, state, and 6-digit pincode" — enough distinctive
-// tokens for a low-false-positive match.
+// 1 + area), city, state, and 6-digit pincode". Require one of the
+// DISTINCTIVE tokens ("full name" / "line 1" / "6-digit") to avoid
+// false-matching our own nudges — the first nudge paraphrases as
+// "share your name, address, city, state, and pincode", the second
+// as "share your address" — neither uses those distinctive tokens,
+// so they can't self-trigger even if the message_id de-dupe below
+// somehow misses them.
 const ADDRESS_ASK_RE =
-  /(please share|share your|share:).{0,30}(full name|address|pincode|line 1|line1)/i
+  /(please share|share your|share:).{0,80}(full name|line ?1|6-digit)/i
 
 /**
  * Identify which close stage the bot's most recent outgoing text
