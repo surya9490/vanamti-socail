@@ -95,6 +95,42 @@ describe('detectCloseStage', () => {
       ),
     ).toBe('address_confirm')
   })
+
+  it('detects address_ask for the "need the state" clarifier', () => {
+    // Real prod case: customer gave partial address; bot asked for
+    // the missing state field. The nudge must still fire off this
+    // follow-up ask if the customer goes silent again.
+    expect(
+      detectCloseStage(
+        'Perfect! Just need the state to complete this — what state is that?',
+      ),
+    ).toBe('address_ask')
+  })
+
+  it('detects address_ask for other missing-field clarifiers', () => {
+    expect(detectCloseStage('What state are you in?')).toBe('address_ask')
+    expect(detectCloseStage('Could you share your pincode?')).toBe('address_ask')
+    expect(detectCloseStage('Which city are we delivering to?')).toBe(
+      'address_ask',
+    )
+    expect(detectCloseStage('Can you share your line 1?')).toBe('address_ask')
+  })
+
+  it('does NOT re-match our own address-ask nudge bodies (anti-loop guarantee)', () => {
+    // These are the EXACT nudge messages the cron sends. Both must
+    // return null so a nudge can never re-trigger another one — even
+    // if the message_id de-dupe misses.
+    expect(
+      detectCloseStage(
+        "Still there? Ready when you are — just share your name, address, city, state, and pincode and I'll get this shipped 🌿",
+      ),
+    ).toBeNull()
+    expect(
+      detectCloseStage(
+        "No rush 🙏 Whenever you're ready, share your address and I'll create the payment link.",
+      ),
+    ).toBeNull()
+  })
 })
 
 describe('pickNextNudge', () => {

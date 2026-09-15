@@ -89,6 +89,18 @@ const ADDRESS_CONFIRM_RE =
 const ADDRESS_ASK_RE =
   /(please share|share your|share:).{0,80}(full name|line ?1|6-digit)/i
 
+// FOLLOW-UP clarifier — the customer gave a partial address and the
+// AI is asking for a specific missing field ("what state?", "just
+// need the pincode", "could you share your city"). Same stage as
+// address_ask; nudge cadence + copy are identical.
+//
+// Anti-loop: none of our nudges use interrogatives ("what/which/
+// need/can you/could you") — they're all declarative "still there?
+// ...share...". So this regex can't match a nudge, keeping the
+// address_ask counter from restarting on our own follow-ups.
+const ADDRESS_CLARIFY_RE =
+  /(what|which|need|(?:can|could) you).{0,60}(state|pincode|city|line ?1|6-digit)/i
+
 /**
  * Identify which close stage the bot's most recent outgoing text
  * leaves the conversation in, or `null` if it isn't close-adjacent.
@@ -104,6 +116,7 @@ export function detectCloseStage(botText: string | null | undefined): CloseStage
   if (PAYMENT_LINK_RE.test(text)) return 'payment_link_sent'
   if (ADDRESS_CONFIRM_RE.test(text)) return 'address_confirm'
   if (ADDRESS_ASK_RE.test(text)) return 'address_ask'
+  if (ADDRESS_CLARIFY_RE.test(text)) return 'address_ask'
   return null
 }
 
