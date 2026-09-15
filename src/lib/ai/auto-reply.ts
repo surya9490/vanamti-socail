@@ -8,7 +8,11 @@ import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
 import { getEnabledTools, type ToolContext } from './tools/registry'
-import { engineSendText } from '@/lib/flows/meta-send'
+import {
+  engineSendText,
+  loadAccountMetaCredentials,
+} from '@/lib/flows/meta-send'
+import { sendTypingIndicator } from '@/lib/whatsapp/meta-api'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import {
   postSlackNotification,
@@ -27,6 +31,10 @@ interface DispatchArgs {
   /** The account's WhatsApp config owner, used for the outbound send's
    *  audit columns (mirrors how the flow runner passes it through). */
   configOwnerUserId: string
+  /** Meta's wamid of the customer message we're replying to. When set,
+   *  a typing indicator (which also marks it read) is shown while the
+   *  reply is generated. Optional so older callers keep working. */
+  inboundMessageId?: string
 }
 
 /**
@@ -51,7 +59,13 @@ interface DispatchArgs {
 export async function dispatchInboundToAiReply(
   args: DispatchArgs,
 ): Promise<void> {
-  const { accountId, conversationId, contactId, configOwnerUserId } = args
+  const {
+    accountId,
+    conversationId,
+    contactId,
+    configOwnerUserId,
+    inboundMessageId,
+  } = args
   const trace_id = newTraceId('ar')
   // Captured for the post-generation race check further down. Any
   // customer inbound with created_at > this value while we were
@@ -428,6 +442,16 @@ export async function dispatchInboundToAiReply(
       return
     }
 
+    // Every gate has passed — we're committed to attempting a reply, so
+    // show the customer "typing…" (and mark their message read) while the
+    // retrieval + LLM round trips run. Meta clears the indicator after
+    // 25 s or when our reply lands, whichever is first, so there's
+    // nothing to undo on the handoff / no-text path. Strictly
+    // best-effort: a failed indicator must never cost us the reply.
+    if (inboundMessageId) {
+      await showTypingIndicator(db, accountId, inboundMessageId)
+    }
+
     // Ground the reply in the account's knowledge base (best-effort).
     const knowledge = await retrieveKnowledge(
       db,
@@ -717,5 +741,30 @@ export async function dispatchInboundToAiReply(
       conversation_id: conversationId,
       error: err instanceof Error ? err.message : String(err),
     })
+  }
+}
+
+/**
+ * Best-effort "typing…" for the inbound we're about to answer. Swallows
+ * every failure (no WhatsApp config, bad token, Meta 4xx) with a warning
+ * — the indicator is cosmetic, the reply is not.
+ */
+async function showTypingIndicator(
+  db: ReturnType<typeof supabaseAdmin>,
+  accountId: string,
+  inboundMessageId: string,
+): Promise<void> {
+  try {
+    const { phoneNumberId, accessToken } = await loadAccountMetaCredentials(
+      db,
+      accountId,
+    )
+    await sendTypingIndicator({
+      phoneNumberId,
+      accessToken,
+      messageId: inboundMessageId,
+    })
+  } catch (err) {
+    console.warn('[ai auto-reply] typing indicator failed (continuing):', err)
   }
 }
