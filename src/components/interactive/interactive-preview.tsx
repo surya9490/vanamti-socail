@@ -11,6 +11,29 @@ function formatPrice(price: number | null | undefined, currency: string | null |
 }
 
 /**
+ * Ask Shopify's CDN for a small thumbnail instead of the full-size
+ * master file. Our product images are stored as-is from Shopify (some
+ * are 5-10 MB PNGs); rendering them as 36px avatars was pulling the
+ * whole file over the wire. Shopify accepts `?width=N` on any
+ * `cdn.shopify.com` URL and returns a scaled variant.
+ *
+ * Non-Shopify hosts are returned unchanged.
+ */
+function thumbUrl(src: string | null | undefined, targetPx: number): string | undefined {
+  if (!src) return undefined;
+  try {
+    const url = new URL(src);
+    if (!/(^|\.)cdn\.shopify\.com$/.test(url.hostname)) return src;
+    // Ask for a slightly larger image than the render size so 2x
+    // DPI screens still get a crisp result.
+    url.searchParams.set("width", String(targetPx * 2));
+    return url.toString();
+  } catch {
+    return src;
+  }
+}
+
+/**
  * WhatsApp-style read-only render of an interactive message. Used both
  * in the builder's live preview and by the inbox message bubble so a
  * sent buttons/list message shows the same way it does on the phone.
@@ -92,8 +115,12 @@ export function InteractivePreview({
                   {p.image_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      src={p.image_url}
+                      src={thumbUrl(p.image_url, 36)}
                       alt=""
+                      width={36}
+                      height={36}
+                      loading="lazy"
+                      decoding="async"
                       className="h-9 w-9 shrink-0 rounded object-cover"
                     />
                   ) : (
