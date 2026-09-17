@@ -41,11 +41,13 @@ import {
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils';
 import { resolveContactSendTarget } from '@/lib/whatsapp/wa-identity';
+import { insertWithTemplatePayloadFallback } from '@/lib/whatsapp/message-insert';
 import type { MessageTemplate } from '@/types';
 import {
   resolveTemplateRow,
   templateBodyParams,
   templateContentText,
+  templateMessagePayload,
 } from '@/lib/whatsapp/template-body';
 
 export const MEDIA_KINDS = ['image', 'video', 'document', 'audio'] as const;
@@ -483,23 +485,29 @@ export async function sendMessageToConversation(
           )
         : (contentText ?? null);
 
-  const { data: messageRecord, error: msgError } = await db
-    .from('messages')
-    .insert({
-      conversation_id: conversationId,
-      sender_type: 'agent',
-      content_type: messageType,
-      content_text: persistedText,
-      media_url: mediaUrl || null,
-      template_name: templateName || null,
-      interactive_payload:
-        messageType === 'interactive' ? interactivePayload : null,
-      message_id: waMessageId,
-      status: 'sent',
-      reply_to_message_id: replyToMessageId || null,
-    })
-    .select()
-    .single();
+  const { data: messageRecord, error: msgError } =
+    await insertWithTemplatePayloadFallback(
+      {
+        conversation_id: conversationId,
+        sender_type: 'agent',
+        content_type: messageType,
+        content_text: persistedText,
+        media_url: mediaUrl || null,
+        template_name: templateName || null,
+        interactive_payload:
+          messageType === 'interactive' ? interactivePayload : null,
+        // Header image, footer and buttons with their final URLs — the
+        // body alone left the Inbox without the link the customer got.
+        template_payload:
+          messageType === 'template'
+            ? templateMessagePayload(templateRow, templateMessageParams)
+            : null,
+        message_id: waMessageId,
+        status: 'sent',
+        reply_to_message_id: replyToMessageId || null,
+      },
+      (row) => db.from('messages').insert(row).select().single()
+    );
 
   if (msgError) {
     console.error('[send-message] error inserting sent message:', msgError);

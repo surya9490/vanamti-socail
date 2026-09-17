@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import type { Message, MessageReaction } from "@/types";
+import type { Message, MessageReaction, TemplateMessagePayload } from "@/types";
 import {
   Clock,
   Check,
@@ -11,6 +11,11 @@ import {
   LayoutTemplate,
   CornerDownLeft,
   Sparkles,
+  ExternalLink,
+  Phone,
+  Copy,
+  Reply,
+  FileText,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
@@ -50,6 +55,138 @@ function failureReason(message: Message): string | null {
   return message.error_details
     ? `${message.error_title} — ${message.error_details}`
     : message.error_title;
+}
+
+/** "vanamati.com/cart?magic_order_id=…" — enough of the URL to recognise it. */
+function shortUrl(url: string): string {
+  return url.replace(/^https?:\/\//, "");
+}
+
+/**
+ * Header image, footer and buttons of a sent template, as the customer's
+ * phone shows them (messages.template_payload, migration 061). URL buttons
+ * are real links and show where they go, so an agent can see — and open —
+ * the exact link the customer was given.
+ */
+function TemplateExtras({
+  payload,
+  isAgent,
+  children,
+}: {
+  payload: TemplateMessagePayload;
+  isAgent: boolean;
+  children: React.ReactNode;
+}) {
+  const header = payload.header;
+  const divider = isAgent ? "border-primary-foreground/20" : "border-border";
+  const subtle = isAgent ? "text-primary-foreground/70" : "text-muted-foreground";
+
+  return (
+    <div className="max-w-72">
+      {header?.format === "image" && (
+        <a href={header.link} target="_blank" rel="noopener noreferrer">
+          {/* eslint-disable-next-line @next/next/no-img-element -- external CDN image, any host */}
+          <img
+            src={header.link}
+            alt=""
+            loading="lazy"
+            className="mb-1 max-h-64 w-full rounded-lg object-cover"
+          />
+        </a>
+      )}
+      {header?.format === "video" && (
+        <video
+          src={header.link}
+          controls
+          preload="metadata"
+          className="mb-1 max-h-64 w-full rounded-lg"
+        />
+      )}
+      {header?.format === "document" && (
+        <a
+          href={header.link}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mb-1 flex items-center gap-2 text-sm underline-offset-2 hover:underline"
+        >
+          <FileText className="h-4 w-4 shrink-0" />
+          <span className="truncate">{shortUrl(header.link)}</span>
+        </a>
+      )}
+      {header?.format === "text" && (
+        <p className="mb-0.5 break-words text-sm font-semibold">{header.text}</p>
+      )}
+
+      {children}
+
+      {payload.footer && (
+        <p className={cn("mt-1 break-words text-[11px]", subtle)}>{payload.footer}</p>
+      )}
+
+      {payload.buttons && payload.buttons.length > 0 && (
+        <div className={cn("mt-2 border-t", divider)}>
+          {payload.buttons.map((button, index) => {
+            const row = cn(
+              "flex w-full items-start gap-2 border-b py-1.5 text-left text-sm last:border-b-0",
+              divider,
+            );
+            if (button.type === "URL") {
+              return (
+                <a
+                  key={index}
+                  href={button.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={button.url}
+                  className={cn(row, "hover:opacity-80")}
+                >
+                  <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span className="min-w-0">
+                    <span className="block font-medium">{button.text}</span>
+                    <span className={cn("block break-all text-[11px]", subtle)}>
+                      {shortUrl(button.url)}
+                    </span>
+                  </span>
+                </a>
+              );
+            }
+            if (button.type === "PHONE_NUMBER") {
+              return (
+                <a key={index} href={`tel:${button.phone_number}`} className={row}>
+                  <Phone className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span className="min-w-0">
+                    <span className="block font-medium">{button.text}</span>
+                    <span className={cn("block text-[11px]", subtle)}>
+                      {button.phone_number}
+                    </span>
+                  </span>
+                </a>
+              );
+            }
+            if (button.type === "COPY_CODE") {
+              return (
+                <div key={index} className={row}>
+                  <Copy className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span className="min-w-0">
+                    <span className="block font-medium">{button.text}</span>
+                    <span className={cn("block font-mono text-[11px]", subtle)}>
+                      {button.code}
+                    </span>
+                  </span>
+                </div>
+              );
+            }
+            return (
+              <div key={index} className={row}>
+                <Reply className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span className="font-medium">{button.text}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function StatusIcon({
@@ -174,17 +311,27 @@ function MessageContent({
             <LayoutTemplate className="h-3 w-3" />
             {t("template")}
           </span>
-          {message.content_text ? (
-            <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
-            </p>
-          ) : (
-            message.template_name && (
-              <p className="mt-1 break-words text-sm italic opacity-80">
-                {message.template_name}
+          {(() => {
+            const body = message.content_text ? (
+              <p className="mt-1 whitespace-pre-wrap break-words text-sm">
+                {message.content_text}
               </p>
-            )
-          )}
+            ) : (
+              message.template_name && (
+                <p className="mt-1 break-words text-sm italic opacity-80">
+                  {message.template_name}
+                </p>
+              )
+            );
+            // Rows sent before migration 061 carry no payload: body only.
+            return message.template_payload ? (
+              <TemplateExtras payload={message.template_payload} isAgent={isAgent}>
+                {body}
+              </TemplateExtras>
+            ) : (
+              body
+            );
+          })()}
         </div>
       );
 

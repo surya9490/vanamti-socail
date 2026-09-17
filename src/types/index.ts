@@ -288,6 +288,13 @@ export interface Message {
    */
   interactive_payload?: InteractiveMessagePayload;
   /**
+   * Header, footer and buttons of an OUTBOUND template as rendered for
+   * this send — button URLs carry their filled-in {{1}} suffix. Only set
+   * when `content_type === 'template'`; null on rows sent before
+   * migration 061.
+   */
+  template_payload?: TemplateMessagePayload | null;
+  /**
    * True when the AI auto-reply bot generated + sent this message (as
    * opposed to a human agent or a deterministic Flow/automation send,
    * which all share `sender_type='bot'`/`'agent'`). Drives the "AI"
@@ -355,6 +362,20 @@ export type TemplateButton =
   | { type: 'URL'; text: string; url: string; example?: string }
   | { type: 'PHONE_NUMBER'; text: string; phone_number: string }
   | { type: 'COPY_CODE'; text: string; example: string };
+
+/** What a sent template showed beyond its body (messages.template_payload). */
+export interface TemplateMessagePayload {
+  header?:
+    | { format: 'text'; text: string }
+    | { format: 'image' | 'video' | 'document'; link: string };
+  footer?: string;
+  buttons?: Array<
+    | { type: 'URL'; text: string; url: string }
+    | { type: 'PHONE_NUMBER'; text: string; phone_number: string }
+    | { type: 'QUICK_REPLY'; text: string }
+    | { type: 'COPY_CODE'; text: string; code: string }
+  >;
+}
 
 export interface TemplateSampleValues {
   body?: string[];

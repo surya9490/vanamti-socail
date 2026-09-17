@@ -348,6 +348,98 @@ describe('sendMessageToConversation — template persistence (#483)', () => {
   });
 });
 
+describe('sendMessageToConversation — template header/buttons (migration 061)', () => {
+  const CART_ROW = {
+    ...TEMPLATE_ROW,
+    name: 'cart_recovery_v2',
+    header_type: 'image',
+    header_media_url: 'https://cdn.example.com/sample.png',
+    body_text: 'Hi {{1}}, you left {{2}} in your cart.',
+    buttons: [
+      { type: 'URL', text: 'Complete your order', url: 'https://vanamati.com/{{1}}', example: 'x' },
+    ],
+  };
+
+  it('stores the header image and the filled-in button URL with the message', async () => {
+    const captured: CapturedWrites = {};
+    await sendMessageToConversation(sendPathDb([CART_ROW], captured), 'acct-1', {
+      conversationId: 'cv-1',
+      messageType: 'template',
+      templateName: 'cart_recovery_v2',
+      templateMessageParams: {
+        body: ['Anita', '1x Ghee'],
+        headerMediaUrl: 'https://cdn.example.com/ghee.png',
+        buttonParams: ['cart?magic_order_id=abc'],
+      },
+    });
+    expect(captured.message?.template_payload).toEqual({
+      header: { format: 'image', link: 'https://cdn.example.com/ghee.png' },
+      buttons: [
+        {
+          type: 'URL',
+          text: 'Complete your order',
+          url: 'https://vanamati.com/cart?magic_order_id=abc',
+        },
+      ],
+    });
+  });
+
+  it('still records the send when the template_payload column does not exist yet', async () => {
+    const inserts: Record<string, unknown>[] = [];
+    const base = sendPathDb([CART_ROW], {});
+    const db = {
+      from(table: string) {
+        const builder = base.from(table) as unknown as Record<string, unknown>;
+        if (table !== 'messages') return builder;
+        return {
+          ...builder,
+          insert: (row: Record<string, unknown>) => {
+            inserts.push(row);
+            const missing = 'template_payload' in row;
+            return {
+              select: () => ({
+                single: async () =>
+                  missing
+                    ? {
+                        data: null,
+                        error: {
+                          code: 'PGRST204',
+                          message:
+                            "Could not find the 'template_payload' column of 'messages' in the schema cache",
+                        },
+                      }
+                    : { data: { id: 'msg-1' }, error: null },
+              }),
+            };
+          },
+        };
+      },
+    } as unknown as SupabaseClient;
+
+    const result = await sendMessageToConversation(db, 'acct-1', {
+      conversationId: 'cv-1',
+      messageType: 'template',
+      templateName: 'cart_recovery_v2',
+      templateMessageParams: { body: ['Anita', '1x Ghee'], buttonParams: ['cart'] },
+    });
+
+    expect(result.messageId).toBe('msg-1');
+    expect(inserts).toHaveLength(2);
+    expect(inserts[1]).not.toHaveProperty('template_payload');
+    expect(inserts[1].content_text).toBe('Hi Anita, you left 1x Ghee in your cart.');
+  });
+
+  it('writes no payload for non-template messages', async () => {
+    const captured: CapturedWrites = {};
+    await sendMessageToConversation(sendPathDb([], captured), 'acct-1', {
+      conversationId: 'cv-1',
+      messageType: 'text',
+      contentText: 'hello',
+    });
+    expect(captured.message?.template_payload).toBeNull();
+  });
+});
+
 // ============================================================
 // Business-scoped user IDs (issue #519)
 //

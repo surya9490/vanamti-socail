@@ -6,6 +6,7 @@ import {
   resolveTemplateRow,
   templateBodyParams,
   templateContentText,
+  templateMessagePayload,
 } from './template-body';
 import type { MessageTemplate } from '@/types';
 
@@ -202,5 +203,104 @@ describe('templateContentText', () => {
 
   it('is null when there is no local row to render from', () => {
     expect(templateContentText(null, ['A123'])).toBeNull();
+  });
+});
+
+describe('templateMessagePayload', () => {
+  const cart = row({
+    name: 'cart_recovery_v2',
+    header_type: 'image',
+    header_media_url: 'https://cdn.example.com/sample.png',
+    body_text: 'Hi {{1}}, you left {{2}} in your cart worth ₹{{3}}.',
+    footer_text: 'www.vanamati.com',
+    buttons: [
+      {
+        type: 'URL',
+        text: 'Complete your order',
+        url: 'https://vanamati.com/{{1}}',
+        example: 'https://vanamati.com/cart',
+      },
+    ],
+  });
+
+  it('records the header image, footer and the button URL this send used', () => {
+    expect(
+      templateMessagePayload(cart, {
+        body: ['Anita', '1x Ghee', '549'],
+        headerMediaUrl: 'https://cdn.example.com/ghee.png?width=800',
+        buttonParams: ['cart?magic_order_id=abc&utm_source=whatsapp'],
+      })
+    ).toEqual({
+      header: {
+        format: 'image',
+        link: 'https://cdn.example.com/ghee.png?width=800',
+      },
+      footer: 'www.vanamati.com',
+      buttons: [
+        {
+          type: 'URL',
+          text: 'Complete your order',
+          url: 'https://vanamati.com/cart?magic_order_id=abc&utm_source=whatsapp',
+        },
+      ],
+    });
+  });
+
+  it("falls back to the row's sample media, like the send builder", () => {
+    expect(templateMessagePayload(cart, {})?.header).toEqual({
+      format: 'image',
+      link: 'https://cdn.example.com/sample.png',
+    });
+  });
+
+  it('accepts buttonParams keyed by index as an object too', () => {
+    expect(
+      templateMessagePayload(cart, { buttonParams: { 0: 'products/honey' } })
+        ?.buttons?.[0]
+    ).toMatchObject({ url: 'https://vanamati.com/products/honey' });
+  });
+
+  it('leaves {{1}} visible when a URL button got no value', () => {
+    expect(templateMessagePayload(cart)?.buttons?.[0]).toMatchObject({
+      url: 'https://vanamati.com/{{1}}',
+    });
+  });
+
+  it('renders a text header and every button kind', () => {
+    const t = row({
+      header_type: 'text',
+      header_content: 'Order {{1}} shipped',
+      buttons: [
+        {
+          type: 'PHONE_NUMBER',
+          text: 'Call us',
+          phone_number: '+911234567890',
+        },
+        { type: 'COPY_CODE', text: 'Copy code', example: 'WELCOME10' },
+        { type: 'QUICK_REPLY', text: 'Stop' },
+      ],
+    });
+    expect(
+      templateMessagePayload(t, {
+        headerText: '#1044',
+        buttonParams: { 1: 'SAVE20' },
+      })
+    ).toEqual({
+      header: { format: 'text', text: 'Order #1044 shipped' },
+      buttons: [
+        {
+          type: 'PHONE_NUMBER',
+          text: 'Call us',
+          phone_number: '+911234567890',
+        },
+        { type: 'COPY_CODE', text: 'Copy code', code: 'SAVE20' },
+        { type: 'QUICK_REPLY', text: 'Stop' },
+      ],
+    });
+  });
+
+  it('is null for a body-only template or no local row', () => {
+    expect(templateMessagePayload(row({}))).toBeNull();
+    expect(templateMessagePayload(null, { buttonParams: ['x'] })).toBeNull();
   });
 });

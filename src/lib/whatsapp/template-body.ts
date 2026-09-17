@@ -17,7 +17,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
-import type { MessageTemplate } from '@/types';
+import type { MessageTemplate, TemplateMessagePayload } from '@/types';
 
 /**
  * Substitute positional `{{1}}`, `{{2}}`… placeholders in a template
@@ -168,4 +168,78 @@ export function templateContentText(
   if (callerText) return callerText;
   if (!row?.body_text) return null;
   return renderTemplateBody(row.body_text, params);
+}
+
+/**
+ * Header, footer and buttons as this send rendered them, for
+ * `messages.template_payload`. Resolves values the same way the send
+ * builder does (template-send-builder.ts): the caller's header media
+ * overrides the row's sample, a URL button's `{{1}}` takes
+ * `buttonParams[i]`, a COPY_CODE button falls back to its example.
+ *
+ * Null when there's no local row or the template is body-only — the
+ * Inbox then renders the body alone, exactly as before.
+ */
+export function templateMessagePayload(
+  row: MessageTemplate | null,
+  messageParams?: unknown
+): TemplateMessagePayload | null {
+  if (!row) return null;
+  const params = (
+    messageParams && typeof messageParams === 'object' ? messageParams : {}
+  ) as {
+    headerText?: unknown;
+    headerMediaUrl?: unknown;
+    buttonParams?: Record<number, unknown>;
+  };
+  const text = (value: unknown) =>
+    typeof value === 'string' && value.trim() ? value : undefined;
+
+  const payload: TemplateMessagePayload = {};
+
+  if (row.header_type === 'text' && row.header_content) {
+    payload.header = {
+      format: 'text',
+      text: row.header_content.replace(
+        /\{\{1\}\}/g,
+        text(params.headerText) ?? '{{1}}'
+      ),
+    };
+  } else if (row.header_type && row.header_type !== 'text') {
+    const link = text(params.headerMediaUrl) ?? text(row.header_media_url);
+    if (link) payload.header = { format: row.header_type, link };
+  }
+
+  if (text(row.footer_text)) payload.footer = row.footer_text;
+
+  const buttons = (row.buttons ?? []).map((button, index) => {
+    const override = text(params.buttonParams?.[index]);
+    switch (button.type) {
+      case 'URL':
+        return {
+          type: 'URL' as const,
+          text: button.text,
+          url: override
+            ? button.url.replace(/\{\{1\}\}/g, override)
+            : button.url,
+        };
+      case 'PHONE_NUMBER':
+        return {
+          type: 'PHONE_NUMBER' as const,
+          text: button.text,
+          phone_number: button.phone_number,
+        };
+      case 'COPY_CODE':
+        return {
+          type: 'COPY_CODE' as const,
+          text: button.text,
+          code: override ?? button.example,
+        };
+      default:
+        return { type: 'QUICK_REPLY' as const, text: button.text };
+    }
+  });
+  if (buttons.length > 0) payload.buttons = buttons;
+
+  return Object.keys(payload).length > 0 ? payload : null;
 }

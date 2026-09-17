@@ -13,7 +13,9 @@ import { resolveContactSendTarget } from '@/lib/whatsapp/wa-identity'
 import {
   resolveTemplateRow,
   templateContentText,
+  templateMessagePayload,
 } from '@/lib/whatsapp/template-body'
+import { insertWithTemplatePayloadFallback } from '@/lib/whatsapp/message-insert'
 import { supabaseAdmin } from './admin-client'
 
 // ------------------------------------------------------------
@@ -235,15 +237,22 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
       : templateContentText(templateRow, input.params ?? [])
   const template_name = input.kind === 'template' ? input.templateName : null
 
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: input.conversationId,
-    sender_type: 'bot',
-    content_type,
-    content_text,
-    template_name,
-    message_id: waMessageId,
-    status: 'sent',
-  })
+  const { error: msgErr } = await insertWithTemplatePayloadFallback(
+    {
+      conversation_id: input.conversationId,
+      sender_type: 'bot',
+      content_type,
+      content_text,
+      template_name,
+      // Automations send no per-send header/button values, so this is the
+      // template's own header, footer and buttons.
+      template_payload:
+        input.kind === 'template' ? templateMessagePayload(templateRow) : null,
+      message_id: waMessageId,
+      status: 'sent',
+    },
+    (row) => db.from('messages').insert(row)
+  )
   if (msgErr) {
     // Meta already has the message; record the DB error but don't pretend
     // the send failed. The engine wraps this in a log line.
