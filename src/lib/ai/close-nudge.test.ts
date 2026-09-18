@@ -131,6 +131,50 @@ describe('detectCloseStage', () => {
       ),
     ).toBeNull()
   })
+
+  it('detects catalog_sent for the bot\'s catalog-follow-up phrasing', () => {
+    // These are what the AI sends after a catalog Multi-Product
+    // Message — customer often goes silent right here (browsing).
+    expect(
+      detectCloseStage(
+        "Here's what we have at Vanamati — tap any product to see details 🌿",
+      ),
+    ).toBe('catalog_sent')
+    expect(
+      detectCloseStage(
+        'Namaste Jayaseelan! 🌿 Take a look at our range above — tap any product for details, and let me know if you have questions or want to order!',
+      ),
+    ).toBe('catalog_sent')
+    expect(
+      detectCloseStage(
+        'Here you go, Surya — tap any product to see details 🌿',
+      ),
+    ).toBe('catalog_sent')
+  })
+
+  it('does NOT re-match our own catalog_sent nudge bodies (anti-loop)', () => {
+    // Both nudge messages the catalog_sent stage sends. Anti-loop.
+    expect(
+      detectCloseStage(
+        "Take your time 🌿 If any of them caught your eye or you'd like a suggestion, I'm right here to help you pick.",
+      ),
+    ).toBeNull()
+    expect(
+      detectCloseStage(
+        "If you're still deciding — a great place to start is our A2 Cow Ghee (customer favourite 🍯). Or tell me what you're looking for and I'll point you to the right one.",
+      ),
+    ).toBeNull()
+  })
+
+  it('when a bot text is BOTH catalog and address-ask, address-ask wins', () => {
+    // Contrived: an AI message that combines both cues. Address-ask
+    // is closer to close, so it should win.
+    expect(
+      detectCloseStage(
+        "Here's what we have — tap any product. Also please share your full name, address (line 1 + area), city, state, and 6-digit pincode.",
+      ),
+    ).toBe('address_ask')
+  })
 })
 
 describe('pickNextNudge', () => {

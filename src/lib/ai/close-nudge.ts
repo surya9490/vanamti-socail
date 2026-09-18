@@ -13,6 +13,7 @@
 // ============================================================
 
 export type CloseStage =
+  | 'catalog_sent'
   | 'address_ask'
   | 'address_confirm'
   | 'payment_link_sent'
@@ -28,6 +29,18 @@ interface StageConfig {
 }
 
 export const STAGE_CONFIG: Record<CloseStage, StageConfig> = {
+  // Bot sent the product catalog / listed products, customer
+  // went quiet before picking anything. Prime moment for a sales
+  // nudge — a real agent would gently probe interest and suggest
+  // a starting point. Two varied messages so it doesn't feel
+  // scripted: probe first, then a low-pressure recommendation.
+  catalog_sent: {
+    nudgeMinutes: [3, 10],
+    messages: [
+      'Take your time 🌿 If any of them caught your eye or you\'d like a suggestion, I\'m right here to help you pick.',
+      'If you\'re still deciding — a great place to start is our A2 Cow Ghee (customer favourite 🍯). Or tell me what you\'re looking for and I\'ll point you to the right one.',
+    ],
+  },
   // Bot asked for the shipping address, customer went quiet
   // BEFORE sharing it. Two short warm nudges, 1 min then 3 min in.
   address_ask: {
@@ -89,6 +102,14 @@ const ADDRESS_CONFIRM_RE =
 const ADDRESS_ASK_RE =
   /(please share|share your|share:).{0,80}(full name|line ?1|6-digit)/i
 
+// The bot's own follow-up text right after a catalog send —
+// "Here's what we have at Vanamati — tap any product...", "Take a
+// look at our range above...", "Here you go — tap any product...".
+// Anti-loop: our catalog_sent nudges don't use "tap any product",
+// "our range", or "at Vanamati", so they can't self-match.
+const CATALOG_SENT_RE =
+  /(tap any product|take a look at (?:our|the) (?:range|catalog|catalogue)|here'?s what we have|here you go[^\n]*tap)/i
+
 // FOLLOW-UP clarifier — the customer gave a partial address and the
 // AI is asking for a specific missing field ("what state?", "just
 // need the pincode", "could you share your city"). Same stage as
@@ -117,6 +138,10 @@ export function detectCloseStage(botText: string | null | undefined): CloseStage
   if (ADDRESS_CONFIRM_RE.test(text)) return 'address_confirm'
   if (ADDRESS_ASK_RE.test(text)) return 'address_ask'
   if (ADDRESS_CLARIFY_RE.test(text)) return 'address_ask'
+  // catalog_sent is the LEAST specific — check last so a bot text
+  // that's both a catalog opener AND an address ask (rare) resolves
+  // to the closer-to-close stage.
+  if (CATALOG_SENT_RE.test(text)) return 'catalog_sent'
   return null
 }
 
