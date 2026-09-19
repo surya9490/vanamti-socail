@@ -1888,7 +1888,11 @@
       "importUrlRequired": "가져올 URL을 입력하세요.",
       "importHint": "동일 도메인에서 최대 30페이지를 크롤링하여 지식으로 추가합니다. 동일 출처 링크만 따라갑니다.",
       "importButton": "가져오기",
-      "importFailed": "가져오기에 실패했습니다."
+      "importFailed": "가져오기에 실패했습니다.",
+      "recrawl": "웹사이트 다시 크롤링",
+      "recrawlTooltip": "이미 가져온 모든 웹사이트를 다시 가져와 AI가 최신 사이트 변경 사항을 반영하도록 합니다 (매주 월요일 자동 실행)",
+      "recrawlSuccess": "{pages}개 페이지를 다시 크롤링했습니다 — {updated}개 업데이트, {imported}개 신규.",
+      "recrawlFailed": "다시 크롤링에 실패했습니다."
     }
   },
   "SignupPage": {

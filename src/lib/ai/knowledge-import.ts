@@ -43,6 +43,76 @@ export interface ImportSiteResult {
   corrupt: boolean
 }
 
+/**
+ * Distinct crawl roots for a set of website-sourced docs: one origin
+ * (scheme + host) per site, derived from each page's `source_url`.
+ * Re-crawling from the origin (the homepage) with the same same-origin
+ * rules is how both the weekly cron and the "Re-crawl now" button
+ * refresh a site without the operator re-entering a URL. Malformed
+ * URLs are skipped. Pure — tested directly.
+ */
+export function originsFromDocs(
+  rows: Array<{ source_url: string | null }>,
+): string[] {
+  const set = new Set<string>()
+  for (const r of rows) {
+    if (!r.source_url) continue
+    try {
+      set.add(new URL(r.source_url).origin)
+    } catch {
+      /* skip malformed */
+    }
+  }
+  return [...set]
+}
+
+export type RecrawlTargetResult =
+  | ({ origin: string } & ImportSiteResult)
+  | { origin: string; error: string }
+
+export interface RecrawlResult {
+  targets: number
+  results: RecrawlTargetResult[]
+}
+
+/**
+ * Re-import every website this account has previously imported.
+ * Per-origin failures are captured in `results`, never thrown, so one
+ * bad site can't block the others. Zero website docs → { targets: 0 }.
+ */
+export async function recrawlAccountWebsites(
+  db: SupabaseClient,
+  args: { accountId: string; userId: string; maxPages?: number },
+): Promise<RecrawlResult> {
+  const { data, error } = await db
+    .from('ai_knowledge_documents')
+    .select('source_url')
+    .eq('account_id', args.accountId)
+    .eq('source_type', 'website')
+    .not('source_url', 'is', null)
+  if (error) throw error
+
+  const origins = originsFromDocs((data ?? []) as Array<{ source_url: string | null }>)
+  const results: RecrawlTargetResult[] = []
+  for (const origin of origins) {
+    try {
+      const r = await importSiteIntoKnowledge(db, {
+        accountId: args.accountId,
+        userId: args.userId,
+        url: origin,
+        maxPages: args.maxPages,
+      })
+      results.push({ origin, ...r })
+    } catch (err) {
+      results.push({
+        origin,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  return { targets: origins.length, results }
+}
+
 export function clampMaxPages(raw: unknown): number | undefined {
   const n = Number(raw)
   return Number.isFinite(n)

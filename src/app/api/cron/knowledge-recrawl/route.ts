@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import {
-  importSiteIntoKnowledge,
+  recrawlAccountWebsites,
   KNOWLEDGE_IMPORT_MAX_PAGES,
 } from '@/lib/ai/knowledge-import'
 
@@ -42,11 +42,6 @@ function maxPagesFromEnv(): number {
   return Math.min(KNOWLEDGE_IMPORT_MAX_PAGES, Math.floor(raw))
 }
 
-interface DocRow {
-  account_id: string
-  source_url: string | null
-}
-
 export async function GET(request: Request): Promise<Response> {
   if (!verifyCronSecret(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -55,34 +50,22 @@ export async function GET(request: Request): Promise<Response> {
   const db = supabaseAdmin()
   const maxPages = maxPagesFromEnv()
 
-  const { data: docsRaw, error: docsErr } = await db
+  // Every account that has imported at least one website.
+  const { data: rows, error: docsErr } = await db
     .from('ai_knowledge_documents')
-    .select('account_id, source_url')
+    .select('account_id')
     .eq('source_type', 'website')
     .not('source_url', 'is', null)
   if (docsErr) {
     console.error('[knowledge-recrawl] docs query failed:', docsErr)
     return NextResponse.json({ error: docsErr.message }, { status: 500 })
   }
-
-  // Distinct (account, origin) targets.
-  const targets = new Map<string, { accountId: string; origin: string }>()
-  for (const row of (docsRaw ?? []) as DocRow[]) {
-    if (!row.source_url) continue
-    let origin: string
-    try {
-      origin = new URL(row.source_url).origin
-    } catch {
-      continue
-    }
-    targets.set(`${row.account_id}|${origin}`, {
-      accountId: row.account_id,
-      origin,
-    })
-  }
+  const accountIds = [
+    ...new Set(((rows ?? []) as { account_id: string }[]).map((r) => r.account_id)),
+  ]
 
   const results: Array<Record<string, unknown>> = []
-  for (const { accountId, origin } of targets.values()) {
+  for (const accountId of accountIds) {
     // created_by on any NEW page: the account owner (same fallback the
     // lead-tag mirror uses when no acting user exists).
     const { data: acct } = await db
@@ -92,30 +75,35 @@ export async function GET(request: Request): Promise<Response> {
       .maybeSingle()
     const ownerUserId = (acct as { owner_user_id?: string } | null)?.owner_user_id
     if (!ownerUserId) {
-      results.push({ account_id: accountId, origin, skipped: 'no owner_user_id' })
+      results.push({ account_id: accountId, skipped: 'no owner_user_id' })
       continue
     }
 
     try {
-      const r = await importSiteIntoKnowledge(db, {
+      const r = await recrawlAccountWebsites(db, {
         accountId,
         userId: ownerUserId,
-        url: origin,
         maxPages,
       })
-      results.push({ account_id: accountId, origin, ...r })
-      console.log(
-        `[knowledge-recrawl] ${origin} account=${accountId} pages=${r.pages} updated=${r.updated} imported=${r.imported} failed=${r.failed} indexFailed=${r.indexFailed}`,
-      )
+      for (const t of r.results) {
+        if ('error' in t) {
+          console.warn(`[knowledge-recrawl] ${t.origin} account=${accountId} failed:`, t.error)
+        } else {
+          console.log(
+            `[knowledge-recrawl] ${t.origin} account=${accountId} pages=${t.pages} updated=${t.updated} imported=${t.imported} failed=${t.failed} indexFailed=${t.indexFailed}`,
+          )
+        }
+      }
+      results.push({ account_id: accountId, ...r })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      console.warn(`[knowledge-recrawl] ${origin} account=${accountId} failed:`, message)
-      results.push({ account_id: accountId, origin, error: message })
+      console.warn(`[knowledge-recrawl] account=${accountId} failed:`, message)
+      results.push({ account_id: accountId, error: message })
     }
   }
 
   return NextResponse.json({
-    targets: targets.size,
+    accounts: accountIds.length,
     max_pages: maxPages,
     results,
   })

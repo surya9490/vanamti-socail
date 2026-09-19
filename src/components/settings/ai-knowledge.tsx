@@ -50,6 +50,7 @@ export function AiKnowledgeCard({
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [reindexing, setReindexing] = useState(false);
+  const [recrawling, setRecrawling] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importUrl, setImportUrl] = useState('');
   const [importing, setImporting] = useState(false);
@@ -202,6 +203,33 @@ export function AiKnowledgeCard({
       toast.error(t('reindexFailed'));
     } finally {
       setReindexing(false);
+    }
+  };
+
+  // Re-import every website already in the KB (no URL to re-enter).
+  // Same logic the weekly cron runs; this is the "I just edited the
+  // site, refresh now" button.
+  const recrawl = async () => {
+    setRecrawling(true);
+    try {
+      const res = await fetch('/api/ai/knowledge/recrawl', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast.success(
+          t('recrawlSuccess', {
+            pages: data.pages ?? 0,
+            updated: data.updated ?? 0,
+            imported: data.imported ?? 0,
+          }),
+        );
+        await fetchDocs();
+      } else {
+        toast.error(data.error ?? t('recrawlFailed'));
+      }
+    } catch {
+      toast.error(t('recrawlFailed'));
+    } finally {
+      setRecrawling(false);
     }
   };
 
@@ -359,6 +387,22 @@ export function AiKnowledgeCard({
                       >
                         <Globe className="mr-2 h-4 w-4" /> {t('importDoc')}
                       </Button>
+                      {docs.some((d) => d.source_type === 'website') && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={recrawl}
+                          disabled={recrawling}
+                          title={t('recrawlTooltip')}
+                        >
+                          {recrawling ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <RefreshCw className="mr-2 h-4 w-4" />
+                          )}
+                          {t('recrawl')}
+                        </Button>
+                      )}
                     </div>
                     {hasEmbeddingsKey && docs.length > 0 && (
                       <Button

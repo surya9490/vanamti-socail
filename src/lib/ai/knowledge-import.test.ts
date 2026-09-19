@@ -14,7 +14,7 @@ vi.mock('./crawl', () => ({
 vi.mock('./config', () => ({ loadEmbeddingsKey: h.loadEmbeddingsKey }))
 vi.mock('./knowledge', () => ({ ingestDocument: h.ingestDocument }))
 
-import { importSiteIntoKnowledge, clampMaxPages } from './knowledge-import'
+import { importSiteIntoKnowledge, clampMaxPages, originsFromDocs } from './knowledge-import'
 
 /**
  * Fake DB: `existingByUrl` decides whether a page is found (→ update)
@@ -109,6 +109,25 @@ describe('importSiteIntoKnowledge', () => {
     const r = await importSiteIntoKnowledge(db, { accountId: 'a', userId: 'u', url: 'https://x.com' })
     expect(r.corrupt).toBe(true)
     expect(r.imported).toBe(1)
+  })
+})
+
+describe('originsFromDocs', () => {
+  it('collapses many pages of one site to a single origin, keeps distinct sites, skips junk', () => {
+    const out = originsFromDocs([
+      { source_url: 'https://vanamati.com/products/a2-cow-ghee' },
+      { source_url: 'https://vanamati.com/blogs/honey' },
+      { source_url: 'https://vanamati.com/' },
+      { source_url: 'https://help.vanamati.com/faq' }, // different host → its own origin
+      { source_url: null },
+      { source_url: 'not a url' },
+    ])
+    expect(out).toEqual(['https://vanamati.com', 'https://help.vanamati.com'])
+  })
+
+  it('returns [] when nothing is website-sourced', () => {
+    expect(originsFromDocs([])).toEqual([])
+    expect(originsFromDocs([{ source_url: null }])).toEqual([])
   })
 })
 
