@@ -86,6 +86,12 @@ const AVAILABLE_TOOLS: { name: string; label: string; description: string }[] = 
     description:
       "Send a paid MARKETING carousel template with product cards + Shop Now buttons — the only way to send a rich visual message OUTSIDE the customer's 24h session window (re-engagement, silent-customer follow-ups). Each send costs ~₹0.85 in India. Requires a Meta-approved carousel template (WhatsApp Business Manager, 1-3 day review) and WHATSAPP_CAROUSEL_TEMPLATE_NAME env var.",
   },
+  {
+    name: 'get_active_offers',
+    label: 'Live discount offers',
+    description:
+      'Let the assistant fetch the CURRENT discount codes from your Vanamati app before quoting any offer — the shared first-order welcome code and any per-customer abandoned-cart code. Without this, the AI only knows whatever "% off" text was scraped from the website, which goes stale the moment you change the offer. Needs VANAMATI_APP_URL + VANAMATI_ORDER_STATUS_KEY.',
+  },
 ];
 
 export function AiConfig() {

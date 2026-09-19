@@ -4,6 +4,7 @@ import { productLookupTool } from './product-lookup'
 import { createDraftOrderTool } from './create-draft-order'
 import { sendProductCatalogTool } from './send-product-catalog'
 import { sendProductCarouselTool } from './send-product-carousel'
+import { getActiveOffersTool } from './get-active-offers'
 
 // ============================================================
 // AI tool registry — the allow-list of actions the assistant may take
@@ -67,6 +68,7 @@ export interface AiTool {
 }
 
 const REGISTRY: Record<string, AiTool> = {
+  [getActiveOffersTool.name]: getActiveOffersTool,
   [orderLookupTool.name]: orderLookupTool,
   [productLookupTool.name]: productLookupTool,
   [createDraftOrderTool.name]: createDraftOrderTool,
