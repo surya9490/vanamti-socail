@@ -5,6 +5,7 @@ import {
   extractText,
   extractTitle,
   extractLinks,
+  shouldSkipPath,
 } from './crawl'
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf'
 
@@ -165,5 +166,61 @@ describe('crawlSite', () => {
   it('throws CrawlError for a non-http URL', async () => {
     stubSite({})
     await expect(crawlSite('ftp://ex.com/file')).rejects.toBeInstanceOf(CrawlError)
+  })
+})
+
+describe('shouldSkipPath — storefront noise filter', () => {
+  const skip = (p: string) => shouldSkipPath(new URL(p, 'https://shop.example'))
+
+  it('skips transactional and utility paths', () => {
+    expect(skip('/search')).toBe(true)
+    expect(skip('/search/')).toBe(true)
+    expect(skip('/cart')).toBe(true)
+    expect(skip('/checkout')).toBe(true)
+    expect(skip('/account/login')).toBe(true)
+  })
+
+  it('skips blog index and tag-index pages but keeps posts', () => {
+    expect(skip('/blogs/news')).toBe(true)
+    expect(skip('/blogs/news/tagged/a2-ghee')).toBe(true)
+    expect(skip('/blogs/news/why-does-pure-honey-crystallize')).toBe(false)
+  })
+
+  it('skips legal boilerplate but keeps shipping/refund policies', () => {
+    expect(skip('/policies/privacy-policy')).toBe(true)
+    expect(skip('/policies/terms-of-service')).toBe(true)
+    expect(skip('/pages/terms-and-conditions')).toBe(true)
+    expect(skip('/policies/shipping-policy')).toBe(false)
+    expect(skip('/policies/refund-policy')).toBe(false)
+    expect(skip('/pages/refund-policy')).toBe(false)
+  })
+
+  it('skips query-string variants (sort / pagination / review=write)', () => {
+    expect(skip('/collections/all?sort_by=price-ascending')).toBe(true)
+    expect(skip('/products/a2-cow-ghee?review=write')).toBe(true)
+    expect(skip('/products/a2-cow-ghee')).toBe(false)
+  })
+
+  it('keeps products, collections, contact and the homepage', () => {
+    expect(skip('/')).toBe(false)
+    expect(skip('/products/iyappa-ghee')).toBe(false)
+    expect(skip('/collections/pure-desi-ghee')).toBe(false)
+    expect(skip('/pages/contact')).toBe(false)
+  })
+})
+
+describe('extractLinks — drops noise paths', () => {
+  it('never enqueues /search, /cart, tag indexes or ?sort_by links', () => {
+    const html = `
+      <a href="/products/a2-cow-ghee">Ghee</a>
+      <a href="/search">Search</a>
+      <a href="/cart">Cart</a>
+      <a href="/blogs/news/tagged/ayurveda">Tag</a>
+      <a href="/collections/all?sort_by=best-selling">Sort</a>
+      <a href="/pages/contact">Contact</a>
+    `
+    expect(extractLinks(html, 'https://shop.example/').sort()).toEqual(
+      ['https://shop.example/pages/contact', 'https://shop.example/products/a2-cow-ghee'].sort(),
+    )
   })
 })

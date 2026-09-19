@@ -103,7 +103,35 @@ export function extractText(html: string): string {
   return s.slice(0, MAX_TEXT_CHARS)
 }
 
-/** Same-origin absolute links found in `<a href>`, with fragments removed. */
+/**
+ * Storefront scaffolding that carries no knowledge — only site chrome
+ * (nav, signup popup, footer). Ingesting it dilutes retrieval and
+ * multiplies whatever stale banner copy the theme repeats on every
+ * page. Generic to Shopify-style stores, not specific to one site:
+ *   /search, /cart, /checkout, /account…   — transactional / utility
+ *   /blogs/<x>  and  /blogs/<x>/tagged/…    — index pages, not posts
+ *   /policies/privacy-policy, terms-of-service, /pages/terms…
+ *                                          — legal boilerplate
+ *   any URL with a query string            — ?sort_by= / ?page= /
+ *                                            ?review=write variants of
+ *                                            a page we already have
+ * Shipping and refund policies are deliberately KEPT — customers ask
+ * about them.
+ */
+export function shouldSkipPath(u: URL): boolean {
+  if (u.search) return true
+  const p = u.pathname.replace(/\/+$/, '') || '/'
+  if (/^\/(search|cart|checkout|account)(\/|$)/i.test(p)) return true
+  if (/^\/blogs\/[^/]+$/i.test(p)) return true // blog index
+  if (/^\/blogs\/[^/]+\/tagged(\/|$)/i.test(p)) return true
+  if (/^\/(policies|pages)\/(privacy-policy|terms-of-service|terms-and-conditions|legal-notice)(\/|$)/i.test(p)) {
+    return true
+  }
+  return false
+}
+
+/** Same-origin absolute links found in `<a href>`, with fragments removed
+ *  and storefront noise paths dropped (see shouldSkipPath). */
 export function extractLinks(html: string, baseUrl: string): string[] {
   let base: URL
   try {
@@ -131,6 +159,7 @@ export function extractLinks(html: string, baseUrl: string): string[] {
     }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') continue
     if (u.origin !== base.origin) continue
+    if (shouldSkipPath(u)) continue
     u.hash = ''
     out.add(u.toString())
   }
@@ -202,7 +231,11 @@ export async function crawlSite(
           const next = new URL(loc, url)
           next.hash = ''
           const nextStr = next.toString()
-          if (next.origin === start.origin && !seen.has(nextStr)) {
+          if (
+            next.origin === start.origin &&
+            !shouldSkipPath(next) &&
+            !seen.has(nextStr)
+          ) {
             seen.add(nextStr)
             queue.push(nextStr)
           }
