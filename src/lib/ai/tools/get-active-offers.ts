@@ -119,7 +119,7 @@ export const getActiveOffersTool: AiTool = {
         )
       }
       if (lines.length === 0) {
-        return 'No discount codes are live right now. Do not offer any code or percentage — lean on free shipping above ₹499 and product value instead.'
+        return 'No discount codes are live right now. Do not offer any code or percentage — lean on free shipping (every order, no minimum) and product value instead.'
       }
       return (
         'LIVE OFFERS (quote ONLY these — ignore any "% off" text in the knowledge base):\n' +
