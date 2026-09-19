@@ -50,6 +50,47 @@ interface OffersResponse {
     expires_at: string
     cart_total_rupees: number | null
   } | null
+  /** Public campaign codes created in Shopify Admin (e.g. DIWALI20).
+   *  Welcome + per-customer recovery codes are excluded server-side. */
+  campaigns?: Array<{
+    code: string
+    title: string | null
+    kind: 'percent' | 'amount' | 'free_shipping' | 'bxgy'
+    value: number | null
+    min_purchase_rupees: number | null
+    ends_at: string | null
+  }>
+}
+
+function formatEnds(iso: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return ''
+  const ms = d.getTime() - Date.now()
+  if (ms <= 0) return ''
+  const days = Math.floor(ms / 86_400_000)
+  if (days >= 1) return `, ends in ${days} day${days === 1 ? '' : 's'}`
+  const hrs = Math.max(1, Math.round(ms / 3_600_000))
+  return `, ends in ${hrs} hour${hrs === 1 ? '' : 's'}`
+}
+
+function describeCampaign(c: NonNullable<OffersResponse['campaigns']>[number]): string {
+  const min =
+    c.min_purchase_rupees && c.min_purchase_rupees > 0
+      ? ` on orders of ₹${c.min_purchase_rupees}+`
+      : ''
+  const what =
+    c.kind === 'percent' && c.value != null
+      ? `${c.value}% off`
+      : c.kind === 'amount' && c.value != null
+        ? `₹${c.value} off`
+        : c.kind === 'free_shipping'
+          ? 'free shipping'
+          : c.kind === 'bxgy'
+            ? 'a buy-X-get-Y deal'
+            : 'a discount'
+  const title = c.title ? ` (${c.title})` : ''
+  return `CAMPAIGN code: ${c.code} — ${what}${min}${title}${formatEnds(c.ends_at)}. Open to everyone.`
 }
 
 function formatExpiry(iso: string): string {
@@ -117,6 +158,9 @@ export const getActiveOffersTool: AiTool = {
         lines.push(
           `THIS CUSTOMER's cart-recovery code: ${c.code} — ${c.percent}% off, single use, ${formatExpiry(c.expires_at)}${total}. Use this one if they're coming back to finish a cart.`,
         )
+      }
+      for (const c of body.campaigns ?? []) {
+        if (c?.code) lines.push(describeCampaign(c))
       }
       if (lines.length === 0) {
         return 'No discount codes are live right now. Do not offer any code or percentage — lean on free shipping (every order, no minimum) and product value instead.'
