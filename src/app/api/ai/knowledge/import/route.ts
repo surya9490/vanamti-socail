@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
-import { loadEmbeddingsKey } from '@/lib/ai/config'
-import { ingestDocument } from '@/lib/ai/knowledge'
-import { crawlSite, CrawlError } from '@/lib/ai/crawl'
-import { AiError } from '@/lib/ai/types'
+import { CrawlError } from '@/lib/ai/crawl'
+import {
+  importSiteIntoKnowledge,
+  clampMaxPages,
+} from '@/lib/ai/knowledge-import'
 
 /**
  * POST /api/ai/knowledge/import  (admin+)
@@ -16,6 +17,7 @@ import { AiError } from '@/lib/ai/types'
  *
  * Idempotent: a doc is keyed by (account_id, source_url), so re-importing
  * updates the existing document for each page instead of duplicating it.
+ * The same logic runs weekly from /api/cron/knowledge-recrawl.
  */
 export async function POST(request: Request) {
   try {
@@ -28,14 +30,15 @@ export async function POST(request: Request) {
     if (!url) {
       return NextResponse.json({ error: 'url is required' }, { status: 400 })
     }
-    const rawMax = Number(body?.max_pages)
-    const maxPages = Number.isFinite(rawMax)
-      ? Math.min(30, Math.max(1, Math.floor(rawMax)))
-      : undefined
 
-    let pages
+    let result
     try {
-      pages = await crawlSite(url, { maxPages })
+      result = await importSiteIntoKnowledge(supabase, {
+        accountId,
+        userId,
+        url,
+        maxPages: clampMaxPages(body?.max_pages),
+      })
     } catch (err) {
       if (err instanceof CrawlError) {
         return NextResponse.json({ error: err.message }, { status: 400 })
@@ -43,91 +46,17 @@ export async function POST(request: Request) {
       throw err
     }
 
-    if (pages.length === 0) {
+    if (result.pages === 0) {
       return NextResponse.json(
         { error: 'No readable pages were found at that URL.' },
         { status: 400 },
       )
     }
 
-    const { key: embeddingsApiKey, corrupt } = await loadEmbeddingsKey(
-      supabase,
-      accountId,
-    )
-
-    let imported = 0
-    let updated = 0
-    let failed = 0
-    let indexFailed = 0
-
-    for (const page of pages) {
-      // Find-or-update on (account_id, source_url) — a plain upsert can't
-      // reliably infer a *partial* unique index via PostgREST, so do it
-      // explicitly.
-      const { data: existing } = await supabase
-        .from('ai_knowledge_documents')
-        .select('id')
-        .eq('account_id', accountId)
-        .eq('source_url', page.url)
-        .maybeSingle()
-
-      let documentId: string
-      if (existing?.id) {
-        const { error: upErr } = await supabase
-          .from('ai_knowledge_documents')
-          .update({ title: page.title, content: page.text, source_type: 'website' })
-          .eq('id', existing.id)
-        if (upErr) {
-          failed++
-          continue
-        }
-        documentId = existing.id
-        updated++
-      } else {
-        const { data: inserted, error: insErr } = await supabase
-          .from('ai_knowledge_documents')
-          .insert({
-            account_id: accountId,
-            created_by: userId,
-            title: page.title,
-            content: page.text,
-            source_type: 'website',
-            source_url: page.url,
-          })
-          .select('id')
-          .single()
-        if (insErr || !inserted) {
-          failed++
-          continue
-        }
-        documentId = inserted.id
-        imported++
-      }
-
-      try {
-        await ingestDocument(
-          supabase,
-          accountId,
-          { embeddingsApiKey },
-          documentId,
-          page.text,
-        )
-      } catch (err) {
-        // The document is saved; only its (optional) semantic index
-        // failed. Lexical search still works — count it and move on.
-        const message = err instanceof AiError ? err.message : 'indexing failed'
-        console.error(`[ai/knowledge import] ingest failed for ${page.url}:`, message)
-        indexFailed++
-      }
-    }
-
+    const { corrupt, ...counts } = result
     return NextResponse.json({
       success: true,
-      pages: pages.length,
-      imported,
-      updated,
-      failed,
-      indexFailed,
+      ...counts,
       ...(corrupt
         ? {
             warning:
