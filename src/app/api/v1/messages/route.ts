@@ -135,15 +135,36 @@ export async function POST(request: Request) {
     let effectiveTemplateLanguage = providedLanguage;
     const templateName = typeof template?.name === 'string' ? template.name : null;
     if (templateName) {
-      const { data: approvedRows } = await ctx.supabase
+      const { data: knownRows } = await ctx.supabase
         .from('message_templates')
-        .select('language')
+        .select('language, status')
         .eq('account_id', ctx.accountId)
-        .eq('name', templateName)
-        .eq('status', 'APPROVED');
-      const approvedLangs = (approvedRows ?? [])
-        .map((r) => (r as { language?: string }).language)
+        .eq('name', templateName);
+      const known = (knownRows ?? []) as { language?: string; status?: string }[];
+      const approvedLangs = known
+        .filter((r) => r.status === 'APPROVED')
+        .map((r) => r.language)
         .filter((l): l is string => typeof l === 'string' && l.length > 0);
+
+      // Fail fast when we KNOW the template can't be sent: it's synced
+      // locally but no translation is APPROVED (PENDING / REJECTED /
+      // PAUSED). Meta would reject it with 132001 anyway, so refusing
+      // here — BEFORE resolveConversationByPhone creates a contact +
+      // conversation — means no Meta call, no orphan shell, and a
+      // status the caller can act on instead of a bare 502. (Observed:
+      // the Vanamati app firing order_confirmation_v1 while still
+      // PENDING review, on every order.) A template that's absent
+      // locally is deliberately still passed through — the local sync
+      // may simply be stale and Meta is the authority.
+      if (known.length > 0 && approvedLangs.length === 0) {
+        const statuses = [...new Set(known.map((r) => r.status ?? 'UNKNOWN'))].join(', ');
+        return fail(
+          'template_not_approved',
+          `Template "${templateName}" is not approved for sending (status: ${statuses}). Wait for Meta approval or choose an APPROVED template.`,
+          422
+        );
+      }
+
       if (approvedLangs.length > 0) {
         effectiveTemplateLanguage =
           providedLanguage && approvedLangs.includes(providedLanguage)
