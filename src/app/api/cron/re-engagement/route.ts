@@ -8,6 +8,12 @@ import {
 } from '@/lib/flows/meta-send'
 import { buildProductCarouselCards } from '@/lib/products/carousel-cards'
 import { buildProductCatalog } from '@/lib/products/catalog-sections'
+import {
+  evaluateThread,
+  isQuietHour,
+  localHour,
+  type SkipReason,
+} from '@/lib/ai/re-engagement'
 
 const SESSION_WINDOW_HOURS = 24
 
@@ -19,12 +25,23 @@ const SESSION_WINDOW_HOURS = 24
 // re_engagement_stages).
 //
 // Per stage:
-//   * only contacts graded 'cold' (Phase 4) and not opted-out
+//   * any non-opted-out contact whose thread went quiet on THEIR
+//     side after OUR last message — lead grade is not a filter
+//     (see lib/ai/re-engagement.ts for the rails: open thread, AI
+//     not paused, customer has spoken, last message is ours and
+//     not a transactional template)
 //   * customer silent for at least `hours_after`
 //   * silent for less than MAX_AGE_HOURS (7d default — abandon
 //     truly dark contacts)
 //   * this stage NOT already sent to this contact (idempotency
 //     lives in contact_re_engagement_sends)
+//
+// Nothing is sent during quiet hours (default 22:00–08:00
+// Asia/Kolkata); the run simply returns and the stage fires on the
+// next hourly run outside the window.
+//
+// `?dry_run=1` evaluates everything and lists who would get which
+// stage without sending or recording anything.
 //
 // For each match: send the stage's template — text or product
 // carousel — and record the send row.
@@ -37,7 +54,10 @@ const SESSION_WINDOW_HOURS = 24
 //
 // Auth: x-cron-secret header matches AUTOMATION_CRON_SECRET.
 // Env: RE_ENGAGEMENT_MAX_AGE_HOURS (default 168 = 7d),
-//      RE_ENGAGEMENT_BATCH_SIZE (default 100, cap 500).
+//      RE_ENGAGEMENT_BATCH_SIZE (default 100, cap 500),
+//      RE_ENGAGEMENT_TIMEZONE (default Asia/Kolkata),
+//      RE_ENGAGEMENT_QUIET_START / _END (local hours, default 22 / 8;
+//      equal values disable quiet hours).
 // ============================================================
 
 function verifyCronSecret(request: Request): boolean {
@@ -53,6 +73,14 @@ function verifyCronSecret(request: Request): boolean {
 function positiveIntEnv(name: string, fallback: number): number {
   const raw = Number(process.env[name])
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback
+}
+
+/** A local hour 0–23; anything else falls back. */
+function hourEnv(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') return fallback
+  const n = Number(raw)
+  return Number.isInteger(n) && n >= 0 && n <= 23 ? n : fallback
 }
 
 interface StageRow {
@@ -83,9 +111,25 @@ export async function GET(request: Request): Promise<Response> {
 
   const maxAgeHours = positiveIntEnv('RE_ENGAGEMENT_MAX_AGE_HOURS', 168)
   const batchSize = Math.min(positiveIntEnv('RE_ENGAGEMENT_BATCH_SIZE', 100), 500)
+  const dryRun = new URL(request.url).searchParams.get('dry_run') === '1'
+
+  const timeZone = process.env.RE_ENGAGEMENT_TIMEZONE || 'Asia/Kolkata'
+  const quietStart = hourEnv('RE_ENGAGEMENT_QUIET_START', 22)
+  const quietEnd = hourEnv('RE_ENGAGEMENT_QUIET_END', 8)
+  const startedAt = new Date()
+  if (!dryRun && isQuietHour(startedAt, timeZone, quietStart, quietEnd)) {
+    return NextResponse.json({
+      skipped: 'quiet_hours',
+      local_hour: localHour(startedAt, timeZone),
+      time_zone: timeZone,
+      candidates: 0,
+      sent: 0,
+      failed: 0,
+    })
+  }
 
   const db = supabaseAdmin()
-  const nowIso = new Date().toISOString()
+  const nowIso = startedAt.toISOString()
 
   // ------------------------------------------------------------
   // 1. Pull every enabled stage across all accounts. In practice
@@ -122,17 +166,28 @@ export async function GET(request: Request): Promise<Response> {
   let failed = 0
   let attempted = 0
   const perStageSent: Record<string, number> = {}
+  const skipped: Partial<Record<SkipReason, number>> = {}
+  const candidates: {
+    contact_id: string
+    conversation_id: string
+    stage: string
+    type: string
+    hours_since: number
+  }[] = []
 
   for (const [accountId, accountStages] of stagesByAccount.entries()) {
     if (attempted >= batchSize) break
 
-    // Cold non-opted-out contacts for this account.
+    // Every non-opted-out contact for this account, most recently
+    // active first. Lead grade is NOT a filter — see
+    // lib/ai/re-engagement.ts; evaluateThread() below holds the
+    // per-thread safety rails.
     const { data: contactsRaw, error: contactsErr } = await db
       .from('contacts')
       .select('id, account_id')
       .eq('account_id', accountId)
-      .eq('lead_stage', 'cold')
       .is('opted_out_at', null)
+      .order('updated_at', { ascending: false, nullsFirst: false })
       .limit(batchSize * 4)
     if (contactsErr) {
       console.warn(`[re-engagement] contacts query failed account=${accountId}:`, contactsErr)
@@ -155,7 +210,17 @@ export async function GET(request: Request): Promise<Response> {
       ((sentRows ?? []) as SentPair[]).map((r) => `${r.contact_id}:${r.stage_id}`),
     )
 
-    const now = Date.now()
+    const now = startedAt.getTime()
+
+    // Our own re-engagement templates don't count as "transactional"
+    // when they're the last thing on a thread — stage 2 must be able
+    // to follow stage 1.
+    const stageTemplateNames = new Set(
+      accountStages
+        .filter((s) => s.template_type === 'text' || s.template_type === 'carousel')
+        .map((s) => s.template_name)
+        .filter((n): n is string => typeof n === 'string' && n.length > 0),
+    )
 
     for (const contact of contacts) {
       if (attempted >= batchSize) break
@@ -163,29 +228,66 @@ export async function GET(request: Request): Promise<Response> {
       // Most-recent conversation for this contact.
       const { data: recentConv } = await db
         .from('conversations')
-        .select('id')
+        .select('id, status, ai_autoreply_disabled')
         .eq('contact_id', contact.id)
         .eq('account_id', accountId)
         .order('last_message_at', { ascending: false, nullsFirst: false })
         .limit(1)
         .maybeSingle()
       if (!recentConv) continue
-      const conversationId = (recentConv as { id: string }).id
+      const conv = recentConv as {
+        id: string
+        status: string | null
+        ai_autoreply_disabled: boolean | null
+      }
+      const conversationId = conv.id
 
-      // Last customer-sent message on that thread.
-      const { data: lastInbound } = await db
-        .from('messages')
-        .select('created_at')
-        .eq('conversation_id', conversationId)
-        .eq('sender_type', 'customer')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      if (!lastInbound) continue
-      const hoursSince =
-        (now - new Date((lastInbound as { created_at: string }).created_at).getTime()) /
-        (60 * 60 * 1000)
-      if (hoursSince >= maxAgeHours) continue
+      // Latest message on the thread (any sender) and the customer's
+      // latest — together they say whether the customer is the quiet
+      // party and for how long.
+      const [{ data: lastAny }, { data: lastInbound }] = await Promise.all([
+        db
+          .from('messages')
+          .select('sender_type, content_type, template_name')
+          .eq('conversation_id', conversationId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        db
+          .from('messages')
+          .select('created_at')
+          .eq('conversation_id', conversationId)
+          .eq('sender_type', 'customer')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ])
+      const last = lastAny as {
+        sender_type: string | null
+        content_type: string | null
+        template_name: string | null
+      } | null
+      const verdict = evaluateThread(
+        {
+          conversationStatus: conv.status,
+          aiAutoreplyDisabled: conv.ai_autoreply_disabled,
+          lastMessage: last
+            ? {
+                senderType: last.sender_type,
+                contentType: last.content_type,
+                templateName: last.template_name,
+              }
+            : null,
+          lastCustomerMessageAt:
+            (lastInbound as { created_at: string } | null)?.created_at ?? null,
+        },
+        { now, maxAgeHours, stageTemplateNames },
+      )
+      if (!verdict.eligible) {
+        skipped[verdict.reason] = (skipped[verdict.reason] ?? 0) + 1
+        continue
+      }
+      const { hoursSince } = verdict
 
       // Iterate stages ascending — first match wins.
       for (const stage of accountStages) {
@@ -209,6 +311,16 @@ export async function GET(request: Request): Promise<Response> {
         }
 
         attempted += 1
+        if (dryRun) {
+          candidates.push({
+            contact_id: contact.id,
+            conversation_id: conversationId,
+            stage: stage.name,
+            type: stage.template_type,
+            hours_since: Number(hoursSince.toFixed(1)),
+          })
+          break
+        }
         try {
           if (stage.template_type === 'carousel') {
             const cards = await buildProductCarouselCards(db, accountId)
@@ -298,5 +410,7 @@ export async function GET(request: Request): Promise<Response> {
     stages: stages.length,
     accounts: stagesByAccount.size,
     perStageSent,
+    skipped,
+    ...(dryRun ? { dry_run: true, would_send: candidates } : {}),
   })
 }
