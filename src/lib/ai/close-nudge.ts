@@ -110,6 +110,30 @@ const ADDRESS_ASK_RE =
 const CATALOG_SENT_RE =
   /(tap any product|take a look at (?:our|the) (?:range|catalog|catalogue)|here'?s what we have|here you go[^\n]*tap)/i
 
+// The bot listed the range in TEXT instead of (or as a fallback to)
+// the catalog — "Here's a quick look at our range meanwhile: • Iyappa
+// Ghee – ₹349 (250ml) • A2 Cow Ghee – ₹599 (250ml) …". Same stall as
+// catalog_sent: the customer has the menu and went quiet. Either
+// signal is enough:
+//   * a bulleted / numbered price list — 3+ lines that each start
+//     with a bullet and carry a ₹ figure
+//   * the range opener / closer phrasing ("quick look at our range",
+//     "which one you'd like details on")
+// Anti-loop: our catalog_sent nudges have no newlines, no ₹, and
+// don't say "look at" or "which one".
+const PRICE_LIST_LINE = '[ \\t]*(?:[•\\-–*]|\\d+[.)])[^\\n]*₹[^\\n]*'
+const PRICE_LIST_RE = new RegExp(
+  `(?:^|\\n)${PRICE_LIST_LINE}(?:\\n+${PRICE_LIST_LINE}){2,}`,
+)
+const RANGE_SHOWN_RE =
+  /((?:quick|brief) look at (?:our|the) (?:range|products|catalog|catalogue)|which one you'?d like (?:details|to know more))/i
+
+// A price list that is really an ORDER SUMMARY ("Total ₹1,148 …
+// Shall I go ahead?") belongs to the close stages, never to
+// catalog_sent. The standard phrasing resolves to address_confirm
+// before we get here; this guard covers the paraphrases that don't.
+const ORDER_SUMMARY_RE = /\b(total|summary|payment link|checkout)\b/i
+
 // FOLLOW-UP clarifier — the customer gave a partial address and the
 // AI is asking for a specific missing field ("what state?", "just
 // need the pincode", "could you share your city"). Same stage as
@@ -142,6 +166,12 @@ export function detectCloseStage(botText: string | null | undefined): CloseStage
   // that's both a catalog opener AND an address ask (rare) resolves
   // to the closer-to-close stage.
   if (CATALOG_SENT_RE.test(text)) return 'catalog_sent'
+  if (
+    (PRICE_LIST_RE.test(text) || RANGE_SHOWN_RE.test(text)) &&
+    !ORDER_SUMMARY_RE.test(text)
+  ) {
+    return 'catalog_sent'
+  }
   return null
 }
 

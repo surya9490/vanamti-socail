@@ -152,6 +152,54 @@ describe('detectCloseStage', () => {
     ).toBe('catalog_sent')
   })
 
+  it('detects catalog_sent when the bot lists the range as a TEXT price list', () => {
+    // The fallback shape the AI uses instead of the catalog card —
+    // seen live 2026-09-20: customer said "I have a question", the
+    // bot replied with the range, customer went silent, no nudge.
+    expect(
+      detectCloseStage(
+        "Namaste Priya! 🌿 Sure, go ahead — what would you like to know? Here's a quick look at our range meanwhile:\n\n• Iyappa Ghee – ₹349 (250ml)\n• A2 Cow Ghee (Bilona) – ₹599 (250ml)\n• Forest Honey (Coorg) – ₹549 (250ml)\n• Acacia Honey – ₹399 (250ml)\n• Multifloral Honey – ₹349 (250ml)\n\nAll FSSAI certified, lab-tested, with free shipping on every order. Let me know which one you'd like details on!",
+      ),
+    ).toBe('catalog_sent')
+    // Bullets only, no opener phrasing.
+    expect(
+      detectCloseStage(
+        'Here are a few options:\n- Forest Honey 250ml — ₹549\n- Acacia Honey 250ml — ₹399\n- Multifloral Honey 250ml — ₹349',
+      ),
+    ).toBe('catalog_sent')
+    // Numbered list, blank lines between items.
+    expect(
+      detectCloseStage(
+        '1. Iyappa Ghee ₹349\n\n2. A2 Ghee ₹599\n\n3. Forest Honey ₹549',
+      ),
+    ).toBe('catalog_sent')
+    // Closer phrasing alone.
+    expect(
+      detectCloseStage('Let me know which one you\'d like details on 🌿'),
+    ).toBe('catalog_sent')
+  })
+
+  it('does NOT treat a single price or a two-item list as the range', () => {
+    expect(detectCloseStage('Forest Honey 500ml is ₹999 🍯')).toBeNull()
+    expect(
+      detectCloseStage('• Forest Honey – ₹549\n• Acacia Honey – ₹399'),
+    ).toBeNull()
+  })
+
+  it('keeps an order summary with prices out of catalog_sent', () => {
+    expect(
+      detectCloseStage(
+        "Here's your order summary:\n• A2 Cow Ghee 250ml – ₹599\n• Forest Honey 250ml – ₹549\n• Shipping – ₹0\nTotal: ₹1,148. Shall I go ahead?",
+      ),
+    ).toBeNull()
+    // The standard phrasing still resolves to the closer stage.
+    expect(
+      detectCloseStage(
+        'Let me confirm your order:\n• A2 Cow Ghee 250ml – ₹599\n• Forest Honey 250ml – ₹549\n• Acacia Honey – ₹399\nReady to create your payment link?',
+      ),
+    ).toBe('address_confirm')
+  })
+
   it('does NOT re-match our own catalog_sent nudge bodies (anti-loop)', () => {
     // Both nudge messages the catalog_sent stage sends. Anti-loop.
     expect(
