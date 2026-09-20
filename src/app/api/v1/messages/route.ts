@@ -33,7 +33,10 @@
 
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
-import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation';
+import {
+  resolveConversationByPhone,
+  rollbackEmptyShell,
+} from '@/lib/whatsapp/resolve-conversation';
 import {
   sendMessageToConversation,
   validateSendMessageParams,
@@ -159,26 +162,43 @@ export async function POST(request: Request) {
       typeof body.name === 'string' ? body.name : null
     );
 
-    const result = await sendMessageToConversation(
-      ctx.supabase,
-      ctx.accountId,
-      {
-        conversationId: resolved.conversationId,
-        messageType: type,
-        contentText: typeof body.text === 'string' ? body.text : null,
-        mediaUrl: typeof body.media_url === 'string' ? body.media_url : null,
-        filename: typeof body.filename === 'string' ? body.filename : null,
-        templateName,
-        templateLanguage: effectiveTemplateLanguage,
-        templateParams,
-        templateMessageParams,
-        interactivePayload,
-        replyToMessageId:
-          typeof body.reply_to_message_id === 'string'
-            ? body.reply_to_message_id
-            : null,
-      }
-    );
+    let result;
+    try {
+      result = await sendMessageToConversation(
+        ctx.supabase,
+        ctx.accountId,
+        {
+          conversationId: resolved.conversationId,
+          messageType: type,
+          contentText: typeof body.text === 'string' ? body.text : null,
+          mediaUrl: typeof body.media_url === 'string' ? body.media_url : null,
+          filename: typeof body.filename === 'string' ? body.filename : null,
+          templateName,
+          templateLanguage: effectiveTemplateLanguage,
+          templateParams,
+          templateMessageParams,
+          interactivePayload,
+          replyToMessageId:
+            typeof body.reply_to_message_id === 'string'
+              ? body.reply_to_message_id
+              : null,
+        }
+      );
+    } catch (err) {
+      // The send failed AFTER we created the contact/conversation for it.
+      // Roll back exactly what THIS request created so a rejected first
+      // send doesn't leave a "No messages yet" shell in the inbox (and a
+      // phone-number-named contact nobody typed). Only rows we made,
+      // only if still empty; a failure here is logged, never masks the
+      // original error. Note this cannot catch the process dying
+      // mid-request (e.g. a 502 from a container cut-over) — the hourly
+      // cleanup-empty-conversations cron covers that case.
+      await rollbackEmptyShell(ctx.supabase, ctx.accountId, resolved).catch(
+        (rbErr) =>
+          console.warn('[api/v1/messages] rollback after failed send failed:', rbErr)
+      );
+      throw err;
+    }
 
     console.log(`[api/v1/messages] sent message ${result.messageId} to ${to} (conversation ${resolved.conversationId})`);
 

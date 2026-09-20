@@ -30,6 +30,11 @@ export interface ResolvedConversation {
   contactId: string;
   /** True if this call created the contact (vs matched an existing one). */
   contactCreated: boolean;
+  /** True if this call created the conversation row (vs found the
+   *  existing one). Lets a caller roll back an empty shell when the
+   *  send that motivated it never happens — otherwise a failed first
+   *  send leaves a "No messages yet" conversation in the inbox. */
+  conversationCreated: boolean;
 }
 
 /**
@@ -142,14 +147,73 @@ export async function resolveConversationByPhone(
   // `.maybeSingle()`, which errors on ≥2 rows: if duplicates predate the
   // unique index (migration 036), we resolve to the canonical survivor
   // instead of falling through and creating yet another (issue #363).
-  const conversationId = await findOrCreateConversationRow(
+  const conv = await findOrCreateConversationRow(
     db,
     accountId,
     contactId,
     ownerUserId
   );
 
-  return { conversationId, contactId, contactCreated };
+  return {
+    conversationId: conv.id,
+    contactId,
+    contactCreated,
+    conversationCreated: conv.created,
+  };
+}
+
+/**
+ * Undo the rows a just-failed send caused `resolveConversationByPhone`
+ * to create. Deletes the conversation only if this call created it AND
+ * it still has no messages; deletes the contact only if this call
+ * created it AND it has no conversations left. Rows that pre-existed,
+ * or that a concurrent request created, are never touched. Idempotent.
+ */
+export async function rollbackEmptyShell(
+  db: SupabaseClient,
+  accountId: string,
+  resolved: ResolvedConversation
+): Promise<{ conversationDeleted: boolean; contactDeleted: boolean }> {
+  let conversationDeleted = false;
+  let contactDeleted = false;
+
+  if (resolved.conversationCreated) {
+    const { count } = await db
+      .from('messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('conversation_id', resolved.conversationId);
+    if ((count ?? 0) === 0) {
+      const { error } = await db
+        .from('conversations')
+        .delete()
+        .eq('id', resolved.conversationId)
+        .eq('account_id', accountId);
+      conversationDeleted = !error;
+    }
+  }
+
+  if (resolved.contactCreated) {
+    const { count } = await db
+      .from('conversations')
+      .select('id', { count: 'exact', head: true })
+      .eq('contact_id', resolved.contactId)
+      .eq('account_id', accountId);
+    if ((count ?? 0) === 0) {
+      const { error } = await db
+        .from('contacts')
+        .delete()
+        .eq('id', resolved.contactId)
+        .eq('account_id', accountId);
+      contactDeleted = !error;
+    }
+  }
+
+  if (conversationDeleted || contactDeleted) {
+    console.log(
+      `[resolve-conversation] rolled back empty shell after failed send: conversation=${conversationDeleted} contact=${contactDeleted}`
+    );
+  }
+  return { conversationDeleted, contactDeleted };
 }
 
 /**
@@ -163,7 +227,7 @@ async function findOrCreateConversationRow(
   accountId: string,
   contactId: string,
   ownerUserId: string
-): Promise<string> {
+): Promise<{ id: string; created: boolean }> {
   const { data: existing, error: findErr } = await db
     .from('conversations')
     .select('id')
@@ -178,7 +242,7 @@ async function findOrCreateConversationRow(
   }
 
   if (existing && existing.length > 0) {
-    return existing[0].id;
+    return { id: existing[0].id, created: false };
   }
 
   const { data: newConv, error: convErr } = await db
@@ -201,12 +265,13 @@ async function findOrCreateConversationRow(
         .order('created_at', { ascending: true })
         .limit(1);
       if (raced && raced.length > 0) {
-        return raced[0].id;
+        // The concurrent request created it — not ours to roll back.
+        return { id: raced[0].id, created: false };
       }
     }
     console.error('[resolve-conversation] conversation create error:', convErr);
     throw new SendMessageError('db_error', 'Failed to create conversation', 500);
   }
 
-  return newConv.id;
+  return { id: newConv.id, created: true };
 }
