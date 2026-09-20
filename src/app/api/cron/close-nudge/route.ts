@@ -180,10 +180,17 @@ export async function GET(request: Request): Promise<Response> {
       continue
     }
 
-    // Is this bot message STILL the latest message in the
-    // conversation? A newer customer inbound (fresh reply) OR a
-    // newer bot message (agent typed in the inbox / a follow-up
-    // nudge from a prior cron run) means the stage moved on.
+    // Is this bot message STILL the latest thing the customer saw
+    // from us, with no reply? A newer customer inbound (fresh reply)
+    // OR a newer bot/agent message (someone typed in the inbox)
+    // means the stage moved on. Our OWN nudge for this thread does
+    // NOT count as "moved on" — it is the follow-up to this very
+    // message. (Before this exemption the second nudge of every
+    // stage was unreachable: nudge 1 became the latest message and
+    // failed this check forever — 13 first nudges, 0 second nudges
+    // in the ledger as of 2026-09-20.) Nudges are never candidates
+    // themselves (filtered above), and the per-stage cap plus the
+    // 6h hard cap bound the count, so this can't re-open the loop.
     const { data: latest } = await db
       .from('messages')
       .select('id, sender_type, created_at')
@@ -191,7 +198,8 @@ export async function GET(request: Request): Promise<Response> {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
-    if (!latest || (latest as { id: string }).id !== bot.id) {
+    const latestId = (latest as { id: string } | null)?.id
+    if (!latestId || (latestId !== bot.id && !nudgeMessageIds.has(latestId))) {
       skipped += 1
       continue
     }
