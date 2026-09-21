@@ -85,6 +85,14 @@ export function buildSystemPrompt(args: {
    * when the contact hasn't shared a name yet.
    */
   customerName?: string | null
+  /**
+   * Set when the customer placed an order recently — we sent them an
+   * order / delivery / review template (or an order number was quoted)
+   * within the last `recentCustomer.windowDays`. Auto-reply mode then
+   * runs in SUPPORT mode: no catalog, no product pitch, no follow-up
+   * hooks, unless the customer themselves asks about products.
+   */
+  recentCustomer?: { daysAgo: number; windowDays: number } | null
 }): string {
   const {
     userPrompt,
@@ -93,6 +101,7 @@ export function buildSystemPrompt(args: {
     defaultLanguage,
     silenceGapDays,
     customerName,
+    recentCustomer,
   } = args
   // Non-empty tag → explicit fallback; else "English". Kept as a
   // sentence rather than an enum so the model handles any BCP-47 tag
@@ -127,9 +136,21 @@ export function buildSystemPrompt(args: {
       const opener = isFirstContact
         ? `This is the customer's first message in this conversation.`
         : `The customer was silent for ${silenceGapDays} day(s) — treat as re-engagement.`
-      greetingClause =
-        `${opener} Open with ONE brief greeting, then answer. On this FIRST turn: if the customer's opener is anything OTHER than a specific-product question (i.e. greetings, emoji, generic asks like "what do you sell", "any products", "show me", "do you have honey", broad category asks) → call send_product_catalog and reply with ONE short warm line. Only skip the catalog if the customer named a SINGLE specific product with size ("Forest Honey 500ml please") — that's already close-mode.\n\n`
+      greetingClause = recentCustomer
+        ? // A recent customer's opener is support, not discovery — no
+          // catalog on the first turn (the support-mode clause below
+          // spells out the rest).
+          `${opener} Open with ONE brief greeting, then answer what they came for. Do NOT send the catalog on this turn.\n\n`
+        : `${opener} Open with ONE brief greeting, then answer. On this FIRST turn: if the customer's opener is anything OTHER than a specific-product question (i.e. greetings, emoji, generic asks like "what do you sell", "any products", "show me", "do you have honey", broad category asks) → call send_product_catalog and reply with ONE short warm line. Only skip the catalog if the customer named a SINGLE specific product with size ("Forest Honey 500ml please") — that's already close-mode.\n\n`
     }
+
+    // SUPPORT MODE for a recent customer. Placed ahead of the catalog
+    // and sales clauses and written as an override: a customer who
+    // ordered days ago and comes back is asking about THAT order, and
+    // a catalog / pitch / "still thinking it over?" reads as spam.
+    const recentCustomerClause = recentCustomer
+      ? `EXISTING CUSTOMER — SUPPORT MODE (this rule overrides the product-discovery, greeting and sales rules below). This customer placed an order ${recentCustomer.daysAgo === 0 ? 'today' : `${recentCustomer.daysAgo} day(s) ago`} (we sent them an order / delivery / review template, or an order number was quoted, within the last ${recentCustomer.windowDays} days). They are here for SUPPORT — order status, delivery timing, how to use the product, a complaint, a thank-you. Answer exactly that, warmly and briefly, then stop. Do NOT call send_product_catalog, do NOT list products or prices, do NOT upsell, cross-sell or suggest a reorder, and do NOT end with a purchase hook ("anything else you'd like to order?"). A "thanks" / "ok" from them gets a one-line sign-off, nothing more. For order questions use the order-status tool (they may quote an order number — pass it). THE ONLY EXCEPTION: if they THEMSELVES ask about products, prices, availability, or say they want to buy / reorder / try something else — then sell normally, catalog included.\n\n`
+      : ''
 
     // ALWAYS-ON catalog preference — applies at every turn, not just
     // the opener. Fires whenever the customer asks a broad product-
@@ -178,6 +199,7 @@ export function buildSystemPrompt(args: {
         `  After the review ask, at most ONE soft line — "and whenever you're running low, just message me and I'll set up a reorder 🌿" — then stop. No catalog, no cross-sell, no second question.\n` +
         `  If the feedback is NEGATIVE ("not good", "didn't like", "bad taste", "problem with") → do NOT ask for a review. Apologise once, ask what went wrong in one question, and follow the handoff rules (a complaint about the product itself → handoff).\n\n` +
         greetingClause +
+        recentCustomerClause +
         catalogAlwaysClause +
         `Catalog order — if the customer's message begins with "[Catalog order]" they selected products FROM THE WHATSAPP CATALOG and tapped Send. Lines list "N× Product Name @ ₹price" with a total. This is STRONG purchase intent — skip greeting, skip product suggestion, treat as if they already completed step (1) of Path A. Reply warmly acknowledging the specific items + total (e.g. "Great choice! Forest Honey 500ml × 2 = ₹1098 🌿 Let's get this to you — please share full name, address (line 1 + area), city, state, and 6-digit pincode."). Then proceed with step (2) onward: collect address → optional cross-sell → final summary → create_draft_order in ONE call with ALL items in line_items[] (never one call per item). Do NOT re-call product_lookup for products already listed — treat the catalog message as authoritative source of what they want.\n\n` +
         `Price accuracy — ALL prices you quote (product prices, variant prices, cross-sell prices, order totals) MUST come from a live tool call in THIS conversation turn — either a "[Catalog order]" message (customer's own selection with prices), a send_product_catalog send you just made, or a product_lookup output you just read. NEVER quote a price from memory, from an earlier turn, or from a similar-looking product. A common mistake: quoting the STARTING price (250ml smallest variant) as if it were the price of a bigger variant (500ml, 1L). The starting price is the CHEAPEST variant — the 500ml/1L price is separate and higher. When in doubt, call product_lookup for the exact product and read the variant line.\n\n` +

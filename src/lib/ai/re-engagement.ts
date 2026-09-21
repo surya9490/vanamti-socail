@@ -22,14 +22,94 @@
 //     re-engagement templates are exempt so stage 2 can follow
 //     stage 1.
 //   * silence < max age (the cron's 7-day default)
+//   * the thread is in a SALES stage — in the current session we
+//     showed products (catalog) or moved toward checkout (address /
+//     payment). A support-only thread ("where is my order?" →
+//     "you're welcome") is never re-engaged.
+//   * a RECENT CUSTOMER (ordered within the last ~10 days, see
+//     recent-customer.ts) is re-engaged only when they were explicitly
+//     mid-checkout (address / payment stage). A catalog alone doesn't
+//     count for them — they didn't come to shop.
 //
 // Plus a quiet-hours window (default 22:00–08:00 Asia/Kolkata): a
 // nudge at 1 am reads as spam and earns blocks.
 // ============================================================
 
+import { detectCloseStage, type CloseStage } from './close-nudge'
+
+export type SalesStage = CloseStage | 'catalog'
+
+const SALES_STAGE_RANK: Record<SalesStage, number> = {
+  catalog: 1,
+  catalog_sent: 1,
+  address_ask: 2,
+  address_confirm: 3,
+  payment_link_sent: 4,
+}
+
+/** True for stages that mean the customer is explicitly buying. */
+export function isCheckoutStage(stage: SalesStage | null): boolean {
+  return stage !== null && SALES_STAGE_RANK[stage] >= 2
+}
+
+export interface SessionMessage {
+  id: string
+  senderType: string | null
+  contentType: string | null
+  contentText: string | null
+  templateName: string | null
+  createdAt: string
+}
+
+/**
+ * The strongest sales stage among OUR messages in the current session
+ * — those sent after (the customer's last message − sessionHours).
+ * Close-nudges and our own re-engagement sends are follow-ups, not
+ * stages, so they are ignored. `null` = we never showed products or
+ * moved toward checkout in this session.
+ */
+export function findSalesStage(
+  messages: readonly SessionMessage[],
+  opts: {
+    lastCustomerAt: string
+    sessionHours?: number
+    /** message ids of close-nudges we sent (ledger) */
+    ignoreMessageIds: ReadonlySet<string>
+    /** bodies of our freeform re-engagement stages */
+    ignoreTexts: ReadonlySet<string>
+    /** template names of our re-engagement stages */
+    stageTemplateNames: ReadonlySet<string>
+  },
+): SalesStage | null {
+  const since =
+    new Date(opts.lastCustomerAt).getTime() - (opts.sessionHours ?? 24) * 3_600_000
+  let best: SalesStage | null = null
+  for (const m of messages) {
+    if (m.senderType === 'customer') continue
+    if (new Date(m.createdAt).getTime() < since) continue
+    if (opts.ignoreMessageIds.has(m.id)) continue
+    const text = (m.contentText ?? '').trim()
+    if (m.contentType === 'template') {
+      // Our own re-engagement template is a follow-up, anything else
+      // is transactional — neither is a sales stage.
+      continue
+    }
+    if (m.contentType === 'text' && text && opts.ignoreTexts.has(text)) continue
+    let stage: SalesStage | null = null
+    if (m.contentType === 'interactive') stage = 'catalog'
+    else if (m.contentType === 'text') stage = detectCloseStage(text)
+    if (stage && (!best || SALES_STAGE_RANK[stage] > SALES_STAGE_RANK[best])) best = stage
+  }
+  return best
+}
+
 export interface ThreadSnapshot {
   conversationStatus: string | null
   aiAutoreplyDisabled: boolean | null
+  /** From findSalesStage(); null = support-only thread. */
+  salesStage: SalesStage | null
+  /** From detectRecentCustomer(); ordered within the window. */
+  recentCustomer: boolean
   /** Most recent message on the thread, any sender. */
   lastMessage: {
     senderType: string | null
@@ -46,6 +126,8 @@ export type SkipReason =
   | 'no_customer_message'
   | 'awaiting_our_reply'
   | 'transactional_flow'
+  | 'no_sales_stage'
+  | 'recent_customer'
   | 'too_old'
 
 export type ThreadVerdict =
@@ -79,6 +161,12 @@ export function evaluateThread(
     !(last.templateName && opts.stageTemplateNames.has(last.templateName))
   ) {
     return { eligible: false, reason: 'transactional_flow' }
+  }
+  if (!snap.salesStage) {
+    return { eligible: false, reason: 'no_sales_stage' }
+  }
+  if (snap.recentCustomer && !isCheckoutStage(snap.salesStage)) {
+    return { eligible: false, reason: 'recent_customer' }
   }
   const hoursSince =
     (opts.now - new Date(snap.lastCustomerMessageAt).getTime()) / 3_600_000

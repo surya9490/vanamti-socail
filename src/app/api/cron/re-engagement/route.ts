@@ -10,10 +10,13 @@ import { buildProductCarouselCards } from '@/lib/products/carousel-cards'
 import { buildProductCatalog } from '@/lib/products/catalog-sections'
 import {
   evaluateThread,
+  findSalesStage,
   isQuietHour,
   localHour,
+  type SessionMessage,
   type SkipReason,
 } from '@/lib/ai/re-engagement'
+import { fetchRecentCustomerVerdict } from '@/lib/ai/recent-customer.server'
 
 const SESSION_WINDOW_HOURS = 24
 
@@ -221,6 +224,13 @@ export async function GET(request: Request): Promise<Response> {
         .map((s) => s.template_name)
         .filter((n): n is string => typeof n === 'string' && n.length > 0),
     )
+    // …and our freeform stage bodies, so a check-in we already sent
+    // isn't mistaken for (or hides) the thread's sales stage.
+    const stageTexts = new Set(
+      accountStages
+        .map((s) => (s.custom_text ?? '').trim())
+        .filter((t) => t.length > 0),
+    )
 
     for (const contact of contacts) {
       if (attempted >= batchSize) break
@@ -267,10 +277,71 @@ export async function GET(request: Request): Promise<Response> {
         content_type: string | null
         template_name: string | null
       } | null
+      const lastCustomerAt =
+        (lastInbound as { created_at: string } | null)?.created_at ?? null
+
+      // Sales stage of the current session + recent-customer check.
+      // Both only matter once the cheap gates above would pass, but
+      // they're needed for the verdict, so load them when the thread
+      // has a customer message at all.
+      let salesStage: ReturnType<typeof findSalesStage> = null
+      let recentCustomer = false
+      if (lastCustomerAt) {
+        const sessionSince = new Date(
+          new Date(lastCustomerAt).getTime() - SESSION_WINDOW_HOURS * 3_600_000,
+        ).toISOString()
+        const [{ data: sessionRows }, { data: nudgeRows }, recent] = await Promise.all([
+          db
+            .from('messages')
+            .select('id, sender_type, content_type, content_text, template_name, created_at')
+            .eq('conversation_id', conversationId)
+            .gte('created_at', sessionSince)
+            .order('created_at', { ascending: false })
+            .limit(40),
+          db
+            .from('conversation_close_nudges')
+            .select('message_id')
+            .eq('conversation_id', conversationId),
+          fetchRecentCustomerVerdict(db, conversationId, now),
+        ])
+        const session: SessionMessage[] = (
+          (sessionRows ?? []) as {
+            id: string
+            sender_type: string | null
+            content_type: string | null
+            content_text: string | null
+            template_name: string | null
+            created_at: string
+          }[]
+        ).map((r) => ({
+          id: r.id,
+          senderType: r.sender_type,
+          contentType: r.content_type,
+          contentText: r.content_text,
+          templateName: r.template_name,
+          createdAt: r.created_at,
+        }))
+        const nudgeIds = new Set(
+          ((nudgeRows ?? []) as { message_id: string | null }[])
+            .map((r) => r.message_id)
+            .filter((id): id is string => Boolean(id)),
+        )
+        salesStage = findSalesStage(session, {
+          lastCustomerAt,
+          sessionHours: SESSION_WINDOW_HOURS,
+          ignoreMessageIds: nudgeIds,
+          ignoreTexts: stageTexts,
+          stageTemplateNames,
+        })
+        recentCustomer = recent.recent
+      }
+
       const verdict = evaluateThread(
         {
           conversationStatus: conv.status,
           aiAutoreplyDisabled: conv.ai_autoreply_disabled,
+          salesStage,
+          recentCustomer,
           lastMessage: last
             ? {
                 senderType: last.sender_type,
@@ -278,8 +349,7 @@ export async function GET(request: Request): Promise<Response> {
                 templateName: last.template_name,
               }
             : null,
-          lastCustomerMessageAt:
-            (lastInbound as { created_at: string } | null)?.created_at ?? null,
+          lastCustomerMessageAt: lastCustomerAt,
         },
         { now, maxAgeHours, stageTemplateNames },
       )

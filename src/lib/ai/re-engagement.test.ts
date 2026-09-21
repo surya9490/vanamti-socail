@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { evaluateThread, isQuietHour, localHour } from './re-engagement'
+import { evaluateThread, findSalesStage, isQuietHour, localHour, type SessionMessage } from './re-engagement'
 
 const NOW = Date.parse('2026-09-20T14:00:00Z')
 const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString()
@@ -10,6 +10,8 @@ const quietWarmLead = {
   aiAutoreplyDisabled: false,
   lastMessage: { senderType: 'bot', contentType: 'text', templateName: null },
   lastCustomerMessageAt: hoursAgo(3.7),
+  salesStage: 'catalog_sent' as const,
+  recentCustomer: false,
 }
 
 describe('evaluateThread', () => {
@@ -73,6 +75,73 @@ describe('evaluateThread', () => {
   it('skips silence at or beyond the max age', () => {
     expect(evaluateThread({ ...quietWarmLead, lastCustomerMessageAt: hoursAgo(168) }, opts)).toEqual({ eligible: false, reason: 'too_old' })
     expect(evaluateThread({ ...quietWarmLead, lastCustomerMessageAt: 'not a date' }, opts)).toEqual({ eligible: false, reason: 'too_old' })
+  })
+})
+
+describe('evaluateThread — sales stage and recent customer rails', () => {
+  it('skips a support-only thread (no products shown, no checkout)', () => {
+    expect(evaluateThread({ ...quietWarmLead, salesStage: null }, opts)).toEqual({ eligible: false, reason: 'no_sales_stage' })
+  })
+
+  it('skips a recent customer who was merely shown the catalog (the Iswarya case)', () => {
+    expect(evaluateThread({ ...quietWarmLead, salesStage: 'catalog', recentCustomer: true }, opts)).toEqual({ eligible: false, reason: 'recent_customer' })
+    expect(evaluateThread({ ...quietWarmLead, salesStage: 'catalog_sent', recentCustomer: true }, opts)).toEqual({ eligible: false, reason: 'recent_customer' })
+  })
+
+  it('still re-engages a recent customer who was explicitly mid-checkout', () => {
+    for (const stage of ['address_ask', 'address_confirm', 'payment_link_sent'] as const) {
+      expect(evaluateThread({ ...quietWarmLead, salesStage: stage, recentCustomer: true }, opts).eligible).toBe(true)
+    }
+  })
+})
+
+describe('findSalesStage', () => {
+  const at = (h: number) => new Date(NOW - h * 3_600_000).toISOString()
+  const msg = (p: Partial<SessionMessage> & { id: string }): SessionMessage => ({
+    senderType: 'bot', contentType: 'text', contentText: null, templateName: null, createdAt: at(1), ...p,
+  })
+  const base = { lastCustomerAt: at(3.7), ignoreMessageIds: new Set<string>(), ignoreTexts: new Set<string>(), stageTemplateNames: new Set<string>() }
+
+  it('returns null for a support-only session ("where is my order" → "you are welcome")', () => {
+    const session = [
+      msg({ id: 'a', contentText: "You're welcome, Iswarya! 🌿 If you need anything else, just message us.", createdAt: at(3.6) }),
+      msg({ id: 'b', contentText: 'Got it! Order #vana1061 is confirmed and currently being packed 📦', createdAt: at(3.65) }),
+      msg({ id: 'c', senderType: 'customer', contentText: '#vana1061', createdAt: at(3.7) }),
+    ]
+    expect(findSalesStage(session, base)).toBeNull()
+  })
+
+  it('finds the catalog when one was sent in the session, even if later replies are plain', () => {
+    const session = [
+      msg({ id: 'a', contentText: "You're welcome!", createdAt: at(3.6) }),
+      msg({ id: 'b', contentType: 'interactive', contentText: "Here's what we have at Vanamati — tap any product 🌿", createdAt: at(3.8) }),
+    ]
+    expect(findSalesStage(session, base)).toBe('catalog')
+  })
+
+  it('reports the strongest stage (checkout beats catalog) and ignores nudges + our check-ins', () => {
+    const checkin = "Hi! Just checking in 🌿 Still thinking it over?"
+    const session = [
+      msg({ id: 'chk', senderType: 'agent', contentText: checkin, createdAt: at(0.5) }),
+      msg({ id: 'n1', contentText: 'Still there? Ready when you are — just share your name, address, city, state, and pincode', createdAt: at(3.5) }),
+      msg({ id: 'a', contentText: 'Sure, no rush 🌿 Whenever you are ready, just message me.', createdAt: at(3.6) }),
+      msg({ id: 'b', contentText: "Let's get this shipped — please share your full name, address (line 1 + area), city, state, and 6-digit pincode.", createdAt: at(4) }),
+      msg({ id: 'c', contentType: 'interactive', contentText: 'Here you go — tap any product', createdAt: at(5) }),
+    ]
+    expect(findSalesStage(session, { ...base, ignoreMessageIds: new Set(['n1']), ignoreTexts: new Set([checkin]) })).toBe('address_ask')
+  })
+
+  it('does not look past the session window into an old sales episode', () => {
+    const session = [
+      msg({ id: 'a', contentText: "You're welcome!", createdAt: at(3.6) }),
+      msg({ id: 'old', contentType: 'interactive', contentText: 'catalog from last week', createdAt: at(3.7 + 30) }),
+    ]
+    expect(findSalesStage(session, base)).toBeNull()
+  })
+
+  it('never treats templates as a sales stage', () => {
+    const session = [msg({ id: 't', contentType: 'template', templateName: 'reengage_day2', createdAt: at(1) })]
+    expect(findSalesStage(session, base)).toBeNull()
   })
 })
 

@@ -59,6 +59,7 @@ vi.mock('./admin-client', () => ({
           select: () => typeof chain
           eq: () => typeof chain
           gt: () => typeof chain
+          gte: () => typeof chain
           order: () => typeof chain
           limit: () => Promise<{ data: unknown; error: null }>
           _isOrdered: boolean
@@ -67,6 +68,7 @@ vi.mock('./admin-client', () => ({
           select: () => chain,
           eq: () => chain,
           gt: () => chain,
+          gte: () => chain,
           order: () => {
             chain._isOrdered = true
             return chain

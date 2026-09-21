@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
+import { fetchRecentCustomerVerdict } from '@/lib/ai/recent-customer.server'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { detectCloseStage, pickNextNudge, STAGE_CONFIG } from '@/lib/ai/close-nudge'
 
@@ -152,6 +153,21 @@ export async function GET(request: Request): Promise<Response> {
     if (!stage) {
       skipped += 1
       continue
+    }
+
+    // A recent customer (ordered in the last ~10 days) who was shown
+    // the catalog is not "deciding" — they came for support and the
+    // catalog was incidental. No browse nudges for them; the explicit
+    // checkout stages (address / payment) still get theirs.
+    if (stage === 'catalog_sent') {
+      const recent = await fetchRecentCustomerVerdict(db, bot.conversation_id, now.getTime())
+      if (recent.recent) {
+        console.log(
+          `[close-nudge] conv=${bot.conversation_id} recent customer (${recent.signal}) — no catalog nudge`,
+        )
+        skipped += 1
+        continue
+      }
     }
 
     // Conversation gate: AI still on, thread open, contact not opted out.

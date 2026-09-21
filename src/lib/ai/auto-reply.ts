@@ -4,6 +4,7 @@ import { buildConversationContext } from './context'
 import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
+import { fetchRecentCustomerVerdict } from './recent-customer.server'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
@@ -223,6 +224,11 @@ export async function dispatchInboundToAiReply(
         }
       }
     }
+
+    // Recent customer? (order / delivery / review template, or an order
+    // number, on this thread within the window). Flips the prompt into
+    // support mode — see lib/ai/recent-customer.ts for the why.
+    const recentCustomer = await fetchRecentCustomerVerdict(db, conversationId, Date.now())
 
     // Adaptive message-batch debounce.
     //
@@ -479,6 +485,12 @@ export async function dispatchInboundToAiReply(
       defaultLanguage: config.defaultLanguage,
       silenceGapDays,
       customerName: contactName,
+      recentCustomer: recentCustomer.recent
+        ? {
+            daysAgo: Math.floor((Date.now() - new Date(recentCustomer.at ?? 0).getTime()) / 86_400_000),
+            windowDays: recentCustomer.windowDays,
+          }
+        : null,
     })
 
     // Function-calling tools the account has switched on (e.g. order
