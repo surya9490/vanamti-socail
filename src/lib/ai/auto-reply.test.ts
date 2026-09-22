@@ -477,6 +477,7 @@ describe('dispatchInboundToAiReply — handoff', () => {
   })
 
   it('an order lookup that missed this turn → holding line + handoff, whatever the model wrote', async () => {
+    h.state.recentInbounds = [{ created_at: new Date().toISOString(), content_type: 'text', content_text: 'Where is my order?' }]
     h.loadAiConfig.mockResolvedValue(aiConfig({ enabledTools: ['order_lookup'] }))
     h.generateReply.mockImplementation(
       async (args: { toolContext?: { signals?: { orderLookup?: string } } }) => {
@@ -487,6 +488,53 @@ describe('dispatchInboundToAiReply — handoff', () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText.mock.calls[0][0].text).toBe(HOLDING)
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  it('"next week my order" is a future order: no lookup consequence, no holding line, no handoff', async () => {
+    const now = Date.now()
+    h.state.recentInbounds = [
+      { created_at: new Date(now).toISOString(), content_type: 'text', content_text: 'NEXT WEEK MY ORDER PL WAIT' },
+      { created_at: new Date(now - 60_000).toISOString(), content_type: 'text', content_text: 'Best my order next week Ghee and Honey 1+1 kg send to phonepay my Addres.' },
+    ]
+    h.loadAiConfig.mockResolvedValue(aiConfig({ enabledTools: ['order_lookup', 'send_product_catalog'] }))
+    h.generateReply.mockImplementation(
+      async (args: { systemPrompt: string; toolContext?: { signals?: { orderLookup?: string; customerIntent?: string } } }) => {
+        expect(args.systemPrompt).toContain('THE CUSTOMER SAYS THEY WILL ORDER LATER')
+        expect(args.toolContext?.signals?.customerIntent).toBe('future_order')
+        // the model ignores the instruction, runs the lookup, misses, and sends the holding line
+        args.toolContext!.signals!.orderLookup = 'missed'
+        return { text: HOLDING, handoff: true }
+      },
+    )
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText.mock.calls[0][0].text).toMatch(/take your time/i)
+    expect(h.state.updatePayload).not.toMatchObject({ ai_autoreply_disabled: true }) // no handoff
+  })
+
+  it('a lookup the model ran on a message with no clear order signal → clarifying question', async () => {
+    h.state.recentInbounds = [{ created_at: new Date().toISOString(), content_type: 'text', content_text: 'hv u sent it' }]
+    h.loadAiConfig.mockResolvedValue(aiConfig({ enabledTools: ['order_lookup'] }))
+    h.generateReply.mockImplementation(async (args: { toolContext?: { signals?: { orderLookup?: string } } }) => {
+      args.toolContext!.signals!.orderLookup = 'missed'
+      return { text: 'Could you share your order number?', handoff: false }
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText.mock.calls[0][0].text).toMatch(/Just to confirm — are you asking about an order/)
+    expect(h.state.updatePayload).not.toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  it('an unclear message with a missed lookup → clarifying question, not the holding line', async () => {
+    const now = Date.now()
+    h.state.recentInbounds = [{ created_at: new Date(now).toISOString(), content_type: 'text', content_text: 'my order 1 kg ghee' }]
+    h.loadAiConfig.mockResolvedValue(aiConfig({ enabledTools: ['order_lookup'] }))
+    h.generateReply.mockImplementation(async (args: { toolContext?: { signals?: { orderLookup?: string } } }) => {
+      args.toolContext!.signals!.orderLookup = 'missed'
+      return { text: HOLDING, handoff: true }
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText.mock.calls[0][0].text).toMatch(/Just to confirm — are you asking about an order/)
+    expect(h.state.updatePayload).not.toMatchObject({ ai_autoreply_disabled: true })
   })
 
   it('a sales conversation keeps its catalog tool and its address ask', async () => {

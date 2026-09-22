@@ -29,6 +29,8 @@ export interface ToolContext {
   signals?: {
     /** Outcome of the LAST order_lookup call this turn. */
     orderLookup?: 'found' | 'missed' | 'down' | 'delayed'
+    /** What the customer's latest message is about (lib/ai/order-guard.ts). */
+    customerIntent?: 'existing_order' | 'future_order' | 'ambiguous' | 'sales' | 'none'
   }
 }
 

@@ -27,6 +27,14 @@
 export const ORDER_HOLDING_MESSAGE =
   "Please give me some time to check your order status — I'll update you here shortly 🙏"
 
+/** When a message could mean an existing order OR a new one: ask, don't guess. */
+export const CLARIFY_MESSAGE =
+  "Just to confirm — are you asking about an order you've already placed, or would you like to place a new one? 🌿"
+
+/** Safety net when the model mishandles "I'll order next week". */
+export const FUTURE_ORDER_MESSAGE =
+  "Sure, take your time 🌿 Just message me here whenever you're ready and I'll set it up for you right away."
+
 // ── Customer side: what is this conversation about? ─────────────────
 
 /** Signals that the customer is talking about an order they already placed. */
@@ -78,9 +86,94 @@ const SALES_INTENT_PATTERNS: RegExp[] = [
   /\b(is|are)\s+[^.?!\n]{0,40}\b(available|in\s+stock)\b(?![^.?!\n]*\b(order|parcel)\b)/i,
 ]
 
+/**
+ * The customer is putting an order OFF to a later time — "next week", "pl
+ * wait", "later", "abhi nahi". Live 2026-09-22: "Best my order next week
+ * Ghee and Honey 1+1 kg send to phonepay my Addres" was read as a question
+ * about an existing order, looked up, missed, and answered with the holding
+ * line three times.
+ */
+const FUTURE_INTENT_PATTERNS: RegExp[] = [
+  /\b(next|coming|following)\s+(week|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday|weekend|salary|time)\b/i,
+  /\b(later|afterwards|after\s+(some\s+time|a\s+few\s+days|few\s+days|\d+\s+days?|a\s+week|salary|diwali|pongal|holi))\b/i,
+  /\b(pl(s|z|ease)?\s+wait|wait\s+(for\s+)?(some\s+time|a\s+few\s+days|few\s+days|a\s+week|till|until)|not\s+now|not\s+today|some\s+other\s+day|another\s+day)\b/i,
+  /\b(will|shall|'ll|gonna|going\s+to|planning\s+to|plan\s+to)\s+(order|buy|purchase|place|take)\b[^.?!\n]*\b(next|later|tomorrow|soon|after|week|month)\b/i,
+  /\b(tomorrow|day\s+after)\b/i,
+  /\b(agle|agla|agli)\s+(hafte|week|mahine|month)|\bbaad\s+m(e|ai)n?\b|\babhi\s+nahi\b|\bkal\s+(order|karunga|karungi|lunga|lungi|karenge)\b/i,
+  /\b(adutha|aduttha)\s+(vaaram|varam|week|maasam|masam|month)|\bapram\b|\bnaalaikku\b|\bipo\s+venda(m)?\b/i,
+]
+
+/** Unmistakably about an order that already exists. */
+const STRONG_EXISTING_PATTERNS: RegExp[] = [
+  /\b(i|we)('ve|\s+have|\s+had)?\s+(just\s+|already\s+|recently\s+)*(ordered|bought|purchased|paid|placed\s+(an?\s+|my\s+|the\s+)?order|made\s+(the\s+|a\s+)?payment)\b/i,
+  /\balready\b/i,
+  /\b(status|tracking|track|courier|awb|consignment|shipped|dispatched|delivered|received|reached|arrived|debited|deducted|refund|replacement|cancel|damaged|leaking|leaked|broken|spoiled|missing)\b/i,
+  /\bwhere\s+is\b|\bwhat\s+happened\b|\bwrong\s+(item|product|order)\b/i,
+  /\bvana\s*-?\s*\d{3,}\b|#\s*\d{3,}\b/i,
+  /\b(it'?s\s+been|almost|past)\s+\d+\s+days?\b/i,
+  /\b(mera|mere|meri|hamara|en|enga|naa|nanna|ente)\s+order\s+(kab|kaha+n?|nahi+|aaya|aayega|mila|milega|enga|eppo|varala|varum|eppudu|yavaga|evide)\b/i,
+  /(ऑर्डर|आर्डर|ओर्डर)\s*(कब|कहाँ|कहां|नहीं|आया|आएगा|मिला|मिलेगा|पहुंचा)|ஆர்டர்\s*(எங்க|எப்போ|வரல|வந்துருச்சா|வந்தது)/,
+]
+
+/** Looks like a NEW order being described: quantities, products, payment apps, an address. */
+const PURCHASE_CUE_PATTERNS: RegExp[] = [
+  /\b\d+\s*(\+\s*\d+\s*)?(kg|kgs|g|gm|gms|gram|grams|ml|l|ltr|litre|liter|jar|jars|bottle|bottles|pcs|piece|pieces|nos|packs?)\b/i,
+  /\b(ghee|honey|oil|jar|bottle)\b/i,
+  /\b(phone\s*pe|phonepay|phonepe|gpay|google\s*pay|paytm|upi|cod|cash)\b/i,
+  /\b\d{6}\b/, // a PIN code — they're giving an address
+]
+
+export type CustomerIntent = 'existing_order' | 'future_order' | 'ambiguous' | 'sales' | 'none'
+
 export function hasOrderIntent(text: string | null | undefined): boolean {
   const t = String(text ?? '')
   return ORDER_INTENT_PATTERNS.some((re) => re.test(t))
+}
+
+export function hasFutureIntent(text: string | null | undefined): boolean {
+  const t = String(text ?? '')
+  return FUTURE_INTENT_PATTERNS.some((re) => re.test(t))
+}
+
+/**
+ * What ONE customer message is about.
+ *   future_order    they'll order later ("next week", "pl wait") — not an
+ *                   existing order, not a sale to close now
+ *   sales           they want to buy / are asking about products now
+ *   existing_order  clearly about an order already placed
+ *   ambiguous       order words without a clear "already placed" signal,
+ *                   alongside quantities / products / payment / an address —
+ *                   could be either → ask, don't guess
+ *   none            filler or unrelated
+ */
+export function classifyCustomerIntent(text: string | null | undefined): CustomerIntent {
+  const t = String(text ?? '')
+  if (!t.trim()) return 'none'
+  const strongExisting = STRONG_EXISTING_PATTERNS.some((re) => re.test(t))
+  if (hasFutureIntent(t) && !strongExisting) return 'future_order'
+  if (hasSalesIntent(t)) return 'sales'
+  if (hasOrderIntent(t)) {
+    if (strongExisting) return 'existing_order'
+    return PURCHASE_CUE_PATTERNS.some((re) => re.test(t)) ? 'ambiguous' : 'existing_order'
+  }
+  return 'none'
+}
+
+/**
+ * The conversation's current intent: the newest message that carries any
+ * intent decides; filler ("yes", "ok", 👍) is skipped. `customerTexts`
+ * newest first. With no intent anywhere, a recent customer counts as
+ * existing_order (they didn't come to be sold to).
+ */
+export function latestIntent(
+  customerTexts: ReadonlyArray<string | null | undefined>,
+  opts: { recentCustomer?: boolean } = {},
+): CustomerIntent {
+  for (const text of customerTexts) {
+    const intent = classifyCustomerIntent(text)
+    if (intent !== 'none') return intent
+  }
+  return opts.recentCustomer ? 'existing_order' : 'none'
 }
 
 export function hasSalesIntent(text: string | null | undefined): boolean {
@@ -101,13 +194,10 @@ export function isSupportSession(
   customerTexts: ReadonlyArray<string | null | undefined>,
   opts: { recentCustomer?: boolean } = {},
 ): boolean {
-  for (const text of customerTexts) {
-    // Buying intent in the same message wins ("I ordered last week — now I
-    // want 2 more"): that is a sale the customer asked for.
-    if (hasSalesIntent(text)) return false
-    if (hasOrderIntent(text)) return true
-  }
-  return Boolean(opts.recentCustomer)
+  const intent = latestIntent(customerTexts, opts)
+  // An unclear message is handled as support too: selling tools withheld,
+  // and the reply is a clarifying question rather than a pitch.
+  return intent === 'existing_order' || intent === 'ambiguous'
 }
 
 // ── Bot side: does the reply break a rule? ──────────────────────────
@@ -150,9 +240,12 @@ export type OrderLookupOutcome = 'found' | 'missed' | 'down' | 'delayed'
 export type GuardReason =
   | 'lookup_missed'
   | 'lookup_down'
+  | 'lookup_missed_unclear'
   | 'claimed_no_order'
   | 'sold_in_support'
+  | 'sold_in_unclear'
   | 'delayed_order'
+  | 'future_order_fallback'
 
 /**
  * Final say on what goes out. The model's reply stands unless it breaks a
@@ -164,12 +257,36 @@ export function enforceOrderRules(input: {
   handoff: boolean
   lookup: OrderLookupOutcome | null
   supportSession: boolean
+  /** From latestIntent(); defaults to existing_order when in a support session. */
+  intent?: CustomerIntent
 }): { text: string; handoff: boolean; reason: GuardReason | null } {
+  const intent = input.intent ?? (input.supportSession ? 'existing_order' : 'none')
   const hold = (reason: GuardReason) => ({ text: ORDER_HOLDING_MESSAGE, handoff: true, reason })
-  if (input.lookup === 'missed') return hold('lookup_missed')
-  if (input.lookup === 'down') return hold('lookup_down')
-  if (input.text && claimsNoOrder(input.text)) return hold('claimed_no_order')
-  if (input.supportSession && input.text && pushesNewPurchase(input.text)) return hold('sold_in_support')
+  const clarify = (reason: GuardReason) => ({ text: CLARIFY_MESSAGE, handoff: false, reason })
+
+  // A failed lookup means "a person checks" ONLY when the customer clearly
+  // asked about an existing order. Unclear → ask. "I'll order next week" →
+  // the lookup should never have run; don't punish the customer for it.
+  if (input.lookup === 'missed' || input.lookup === 'down') {
+    if (intent === 'existing_order') return hold(input.lookup === 'down' ? 'lookup_down' : 'lookup_missed')
+    // The model thought this was about an order but the message didn't say
+    // so clearly (or said nothing we recognise) → ask, don't guess.
+    if (intent === 'ambiguous' || intent === 'none') return clarify('lookup_missed_unclear')
+  }
+  if (intent === 'future_order') {
+    // The customer said they haven't ordered yet — "no order" is not a false
+    // claim here, but a holding line or a handoff would be a wrong turn.
+    if (!input.text || input.text.trim() === ORDER_HOLDING_MESSAGE || input.handoff) {
+      return { text: FUTURE_ORDER_MESSAGE, handoff: false, reason: 'future_order_fallback' }
+    }
+    return { text: input.text, handoff: false, reason: null }
+  }
+  if (intent !== 'sales' && input.text && claimsNoOrder(input.text)) {
+    return intent === 'ambiguous' ? clarify('claimed_no_order') : hold('claimed_no_order')
+  }
+  if (input.supportSession && input.text && pushesNewPurchase(input.text)) {
+    return intent === 'ambiguous' ? clarify('sold_in_unclear') : hold('sold_in_support')
+  }
   if (input.lookup === 'delayed') {
     return {
       text: input.text || ORDER_HOLDING_MESSAGE,

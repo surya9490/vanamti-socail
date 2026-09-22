@@ -8,7 +8,7 @@ import { fetchRecentCustomerVerdict } from './recent-customer.server'
 import {
   SALES_TOOL_NAMES,
   enforceOrderRules,
-  isSupportSession,
+  latestIntent,
 } from './order-guard'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
@@ -248,10 +248,13 @@ export async function dispatchInboundToAiReply(
       .gte('created_at', new Date(Date.now() - 14 * 86_400_000).toISOString())
       .order('created_at', { ascending: false })
       .limit(30)
-    const supportSession = isSupportSession(
+    const customerIntent = latestIntent(
       ((supportWindow ?? []) as { content_text: string | null }[]).map((m) => m.content_text),
       { recentCustomer: recentCustomer.recent },
     )
+    // Unclear messages are handled like support: selling tools withheld,
+    // and the reply is a clarifying question — never a guess.
+    const supportSession = customerIntent === 'existing_order' || customerIntent === 'ambiguous'
 
     // Adaptive message-batch debounce.
     //
@@ -515,6 +518,7 @@ export async function dispatchInboundToAiReply(
           }
         : null,
       supportSession,
+      customerIntent,
     })
 
     // Function-calling tools the account has switched on (e.g. order
@@ -540,7 +544,7 @@ export async function dispatchInboundToAiReply(
         conversationId,
         contactId,
         contactPhone: (toolContact as { phone?: string } | null)?.phone ?? null,
-        signals: {},
+        signals: { customerIntent },
       }
     }
 
@@ -590,6 +594,7 @@ export async function dispatchInboundToAiReply(
       handoff,
       lookup: toolContext?.signals?.orderLookup ?? null,
       supportSession,
+      intent: customerIntent,
     })
     if (guarded.reason) {
       log.info('auto_reply.order_guard', {
@@ -597,6 +602,7 @@ export async function dispatchInboundToAiReply(
         conversation_id: conversationId,
         reason: guarded.reason,
         support_session: supportSession,
+        customer_intent: customerIntent,
         blocked_text: guarded.text === text ? null : text.slice(0, 300),
       })
     }

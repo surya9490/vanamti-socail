@@ -1,5 +1,5 @@
 import type { AiTool } from './registry'
-import { ORDER_HOLDING_MESSAGE } from '@/lib/ai/order-guard'
+import { CLARIFY_MESSAGE, FUTURE_ORDER_MESSAGE, ORDER_HOLDING_MESSAGE } from '@/lib/ai/order-guard'
 import {
   LOOKUP_UNAVAILABLE,
   extractOrderNumber,
@@ -22,7 +22,22 @@ const CARE_NOTE =
 const DELAYED_NOTE =
   '\n\n[DELAYED ORDER — this order is past its promised dispatch time. Apologise sincerely in ONE short line, say our team is checking it now and will update them here shortly (do NOT promise a date), then end your reply with [[HANDOFF]] so a person expedites it. No products, no upsell.]'
 
-export function notFoundGuidance(orderNumber: string | null): string {
+export function notFoundGuidance(
+  orderNumber: string | null,
+  intent?: 'existing_order' | 'future_order' | 'ambiguous' | 'sales' | 'none',
+): string {
+  if (intent === 'future_order') {
+    return (
+      '[NO ORDER MATCHED, AND NONE WAS EXPECTED — instructions for you.] The customer said they will order LATER; this lookup should not have run. ' +
+      `Do NOT send a holding line, do NOT hand off, do NOT ask for address or payment. Reply warmly in one or two lines like: "${FUTURE_ORDER_MESSAGE}" — confirm any items they mentioned, then stop.`
+    )
+  }
+  if (intent === 'ambiguous' || intent === 'sales' || intent === 'none') {
+    return (
+      '[NO ORDER MATCHED — instructions for you.] The customer has not clearly asked about an existing order, so do not guess. ' +
+      `Do NOT say they have no order, do NOT hand off. Reply with exactly: "${CLARIFY_MESSAGE}"`
+    )
+  }
   const what = orderNumber
     ? `No order named "${orderNumber}" matched THIS customer's WhatsApp number.`
     : "No order matched THIS customer's WhatsApp number."
@@ -104,7 +119,7 @@ export const orderLookupTool: AiTool = {
     }
     if (!result.found) {
       ctx.signals.orderLookup = 'missed'
-      return notFoundGuidance(orderNumber)
+      return notFoundGuidance(orderNumber, ctx.signals.customerIntent)
     }
     ctx.signals.orderLookup = result.delayed ? 'delayed' : 'found'
     return result.message + (result.delayed ? DELAYED_NOTE : CARE_NOTE)

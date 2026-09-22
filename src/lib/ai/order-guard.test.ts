@@ -1,11 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import {
+  CLARIFY_MESSAGE,
+  FUTURE_ORDER_MESSAGE,
   ORDER_HOLDING_MESSAGE,
   claimsNoOrder,
+  classifyCustomerIntent,
   enforceOrderRules,
   hasOrderIntent,
   hasSalesIntent,
   isSupportSession,
+  latestIntent,
   pushesNewPurchase,
 } from './order-guard'
 
@@ -97,6 +101,52 @@ describe('isSupportSession (newest first)', () => {
   })
 })
 
+describe('classifyCustomerIntent — ask, don\'t guess', () => {
+  it.each([
+    // Duraisamy, live 2026-09-22: a prospect saying he'll order next week
+    'Best my order next week Ghee and Honey 1+1 kg send to phonepay my Addres.',
+    'NEXT WEEK MY ORDER PL WAIT',
+    'I will order after salary next month',
+    'pl wait, will order later',
+    'agle hafte order karunga',
+    'adutha vaaram order pannuren',
+    'not now, next week',
+  ])('future: %s', (t) => expect(classifyCustomerIntent(t)).toBe('future_order'))
+
+  it.each([
+    'What happened to my order',
+    'I have just ordered half kg',
+    'I ordered last week, will it come next week?', // future words, but clearly an existing order
+    'my order not received',
+    'vana1073',
+    'mera order kab aayega',
+    'Almost 5 days',
+  ])('existing: %s', (t) => expect(classifyCustomerIntent(t)).toBe('existing_order'))
+
+  it.each([
+    'my order 1 kg ghee',
+    'my order ghee and honey 1+1 kg phonepe',
+    'my order 2 jars honey 600001',
+  ])('ambiguous: %s', (t) => expect(classifyCustomerIntent(t)).toBe('ambiguous'))
+
+  it.each(['I want to order half kg ghee', 'send me the catalog', 'price of acacia honey?'])('sales: %s', (t) =>
+    expect(classifyCustomerIntent(t)).toBe('sales'),
+  )
+  it.each(['Yes', 'ok', '👍', '', 'Hi'])('none: %s', (t) => expect(classifyCustomerIntent(t)).toBe('none'))
+
+  it('latestIntent skips filler and takes the newest intent-bearing message', () => {
+    expect(latestIntent(['Yes', 'NEXT WEEK MY ORDER PL WAIT', 'Best my order next week Ghee and Honey 1+1 kg'])).toBe('future_order')
+    expect(latestIntent(['Yes', 'Ghee', 'I have just ordered half kg'])).toBe('existing_order')
+    expect(latestIntent(['Hi'], { recentCustomer: true })).toBe('existing_order')
+    expect(latestIntent(['Hi'])).toBe('none')
+  })
+
+  it('a future order is not a support session; an unclear one is', () => {
+    expect(isSupportSession(['NEXT WEEK MY ORDER PL WAIT'])).toBe(false)
+    expect(isSupportSession(['my order 1 kg ghee'])).toBe(true)
+  })
+})
+
 describe('claimsNoOrder — the real bad replies', () => {
   it.each([
     "I checked but couldn't find an order under this number, Zakir.",
@@ -157,6 +207,29 @@ describe('enforceOrderRules', () => {
     const text = 'Please share your full name, address (line 1 + area), city, state, and 6-digit pincode.'
     expect(enforceOrderRules({ text, handoff: false, lookup: null, supportSession: false })).toEqual({ text, handoff: false, reason: null })
   })
+  it('lookup missed on an UNCLEAR message → clarifying question, no handoff', () => {
+    expect(enforceOrderRules({ ...ok, lookup: 'missed', intent: 'ambiguous', text: 'Could you share your order number?' })).toEqual({
+      text: CLARIFY_MESSAGE, handoff: false, reason: 'lookup_missed_unclear',
+    })
+  })
+  it('future order: a holding line or a handoff is replaced by a friendly wait line (Duraisamy)', () => {
+    expect(enforceOrderRules({ text: ORDER_HOLDING_MESSAGE, handoff: true, lookup: 'missed', supportSession: false, intent: 'future_order' })).toEqual({
+      text: FUTURE_ORDER_MESSAGE, handoff: false, reason: 'future_order_fallback',
+    })
+  })
+  it('future order: a sensible model reply goes out unchanged, never hands off', () => {
+    const text = "Sure, Duraisamy — 1 kg ghee + 1 kg honey next week sounds great 🌿 Just message me when you're ready and I'll set it up."
+    expect(enforceOrderRules({ text, handoff: false, lookup: null, supportSession: false, intent: 'future_order' })).toEqual({ text, handoff: false, reason: null })
+  })
+  it('future order: "you haven\'t placed an order yet" is not a false claim', () => {
+    const text = "No problem — you haven't placed an order yet, so just message me next week and I'll set it up 🌿"
+    expect(enforceOrderRules({ text, handoff: false, lookup: null, supportSession: false, intent: 'future_order' }).text).toBe(text)
+  })
+  it('unclear message + purchase push → clarifying question, no handoff', () => {
+    const r = enforceOrderRules({ text: 'Please share your full name, address (line 1 + area)…', handoff: false, lookup: null, supportSession: true, intent: 'ambiguous' })
+    expect(r).toEqual({ text: CLARIFY_MESSAGE, handoff: false, reason: 'sold_in_unclear' })
+  })
+
   it('delayed order keeps the apology but always hands off', () => {
     const r = enforceOrderRules({ ...ok, lookup: 'delayed', text: "I'm sorry it's taking longer — our team is checking now." })
     expect(r).toEqual({ text: "I'm sorry it's taking longer — our team is checking now.", handoff: true, reason: 'delayed_order' })

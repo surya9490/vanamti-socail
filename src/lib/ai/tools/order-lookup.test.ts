@@ -150,4 +150,17 @@ describe('orderLookupTool', () => {
     const result = await orderLookupTool.run({ order_number: '1024' }, ctx())
     expect(result).toBe(LOOKUP_DOWN_GUIDANCE)
   })
+
+  it('a miss for a FUTURE order or an UNCLEAR message never tells the model to hold or hand off', async () => {
+    vi.mocked(fetchRecentOrders).mockResolvedValue({ found: false, delayed: false, message: 'none' })
+    const fut = ctx({ signals: { customerIntent: 'future_order' } })
+    const r1 = await orderLookupTool.run({}, fut)
+    expect(r1).toMatch(/NONE WAS EXPECTED/)
+    expect(r1).not.toContain('[[HANDOFF]]')
+    expect(r1).not.toContain('Please give me some time')
+    const amb = ctx({ signals: { customerIntent: 'ambiguous' } })
+    const r2 = await orderLookupTool.run({}, amb)
+    expect(r2).toContain('Just to confirm — are you asking about an order')
+    expect(r2).not.toContain('[[HANDOFF]]')
+  })
 })
