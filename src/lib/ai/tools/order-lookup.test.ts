@@ -114,11 +114,23 @@ describe('orderLookupTool', () => {
     expect(result).not.toContain('no match')
   })
 
-  it('a miss with no number → ask for the order number or checkout phone, never "no order"', async () => {
+  it('a miss with no number → holding line + handoff too (a person finds the order), never "no order"', async () => {
     vi.mocked(fetchRecentOrders).mockResolvedValue({ found: false, delayed: false, message: 'none' })
-    const result = await orderLookupTool.run({}, ctx())
+    const c = ctx()
+    const result = await orderLookupTool.run({}, c)
     expect(result).toMatch(/ORDER NOT MATCHED/)
-    expect(result).toMatch(/phone number \/ email they used at checkout/)
+    expect(result).toContain('Please give me some time to check your order status')
+    expect(result).toContain('[[HANDOFF]]')
+    expect(c.signals?.orderLookup).toBe('missed')
+  })
+
+  it('records the outcome for the order guard', async () => {
+    const c = ctx()
+    await orderLookupTool.run({ order_number: '1024' }, c)
+    expect(c.signals?.orderLookup).toBe('found')
+    vi.mocked(fetchOrderStatus).mockResolvedValue(null)
+    await orderLookupTool.run({ order_number: '1024' }, c)
+    expect(c.signals?.orderLookup).toBe('down')
   })
 
   it('a delayed order → apologise, team is checking, hand off', async () => {

@@ -25,6 +25,11 @@ export interface ToolContext {
   /** The contact's stored phone. Null when not on file. Tools that act on
    *  customer-owned data key off this, never a value from the model. */
   contactPhone: string | null
+  /** Written by tools during a turn, read by the order guard afterwards. */
+  signals?: {
+    /** Outcome of the LAST order_lookup call this turn. */
+    orderLookup?: 'found' | 'missed' | 'down' | 'delayed'
+  }
 }
 
 /**

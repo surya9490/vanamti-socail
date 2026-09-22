@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { fetchRecentCustomerVerdict } from '@/lib/ai/recent-customer.server'
+import { fetchSupportSession } from '@/lib/ai/order-guard.server'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { detectCloseStage, pickNextNudge, STAGE_CONFIG } from '@/lib/ai/close-nudge'
 
@@ -151,6 +152,16 @@ export async function GET(request: Request): Promise<Response> {
     if (sent >= batchSize) break
     const stage = detectCloseStage(bot.content_text)
     if (!stage) {
+      skipped += 1
+      continue
+    }
+
+    // A customer whose latest intent is an EXISTING order (status,
+    // delivery, "I already ordered") is never nudged — not even at the
+    // address / payment stages: that bot message should not have been
+    // sent to them, and a follow-up asking for money compounds it.
+    if (await fetchSupportSession(db, bot.conversation_id, now.getTime())) {
+      console.log(`[close-nudge] conv=${bot.conversation_id} support session — no nudge`)
       skipped += 1
       continue
     }

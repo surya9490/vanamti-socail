@@ -110,6 +110,8 @@ export interface ThreadSnapshot {
   salesStage: SalesStage | null
   /** From detectRecentCustomer(); ordered within the window. */
   recentCustomer: boolean
+  /** From isSupportSession(): latest intent is about an existing order. */
+  supportSession?: boolean
   /** Most recent message on the thread, any sender. */
   lastMessage: {
     senderType: string | null
@@ -128,6 +130,7 @@ export type SkipReason =
   | 'transactional_flow'
   | 'no_sales_stage'
   | 'recent_customer'
+  | 'support_session'
   | 'too_old'
 
 export type ThreadVerdict =
@@ -161,6 +164,9 @@ export function evaluateThread(
     !(last.templateName && opts.stageTemplateNames.has(last.templateName))
   ) {
     return { eligible: false, reason: 'transactional_flow' }
+  }
+  if (snap.supportSession) {
+    return { eligible: false, reason: 'support_session' }
   }
   if (!snap.salesStage) {
     return { eligible: false, reason: 'no_sales_stage' }

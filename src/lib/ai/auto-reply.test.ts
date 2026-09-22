@@ -14,7 +14,7 @@ const h = vi.hoisted(() => ({
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
     recentAiMessages: [] as { id: string; created_at: string }[],
-    recentInbounds: [] as { created_at: string }[],
+    recentInbounds: [] as { created_at: string; content_type?: string; content_text?: string | null }[],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
     rpcCalls: [] as { name: string; args: unknown }[],
@@ -432,6 +432,74 @@ describe('dispatchInboundToAiReply — handoff', () => {
       aiGenerated: true,
     })
     expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  // ── Order guard (lib/ai/order-guard.ts) — live incidents 2026-09-17/22 ──
+  const HOLDING = "Please give me some time to check your order status — I'll update you here shortly 🙏"
+
+  it('a "no order" reply never goes out: holding line + handoff instead', async () => {
+    h.generateReply.mockResolvedValue({
+      text: "I'm so sorry — I don't actually see an order placed under this number. It looks like it wasn't completed on our end.",
+      handoff: false,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText.mock.calls[0][0].text).toBe(HOLDING)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  it('support session: selling tools are withheld and a new-order push is blocked', async () => {
+    const now = Date.now()
+    h.state.recentInbounds = [
+      { created_at: new Date(now).toISOString(), content_type: 'text', content_text: 'Almost 5 days' },
+      { created_at: new Date(now - 60_000).toISOString(), content_type: 'text', content_text: 'What happened to my order' },
+    ]
+    h.loadAiConfig.mockResolvedValue(
+      aiConfig({ enabledTools: ['order_lookup', 'send_product_catalog', 'create_draft_order', 'product_lookup'] }),
+    )
+    let offered: string[] = []
+    h.generateReply.mockImplementation(async (args: { tools?: Array<{ name: string }> }) => {
+      offered = (args.tools ?? []).map((t) => t.name)
+      return {
+        text: "Let's fix this right away — I'll set up your 500ml A2 Cow Ghee (₹1099) order now. Shall I send you the payment link?",
+        handoff: false,
+      }
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(offered).toContain('order_lookup')
+    expect(offered).toContain('product_lookup')
+    expect(offered).not.toContain('send_product_catalog')
+    expect(offered).not.toContain('create_draft_order')
+    expect(h.engineSendText.mock.calls[0][0].text).toBe(HOLDING)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    const systemPrompt = h.generateReply.mock.calls[0][0].systemPrompt as string
+    expect(systemPrompt).toContain('THIS CONVERSATION IS CUSTOMER CARE')
+  })
+
+  it('an order lookup that missed this turn → holding line + handoff, whatever the model wrote', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ enabledTools: ['order_lookup'] }))
+    h.generateReply.mockImplementation(
+      async (args: { toolContext?: { signals?: { orderLookup?: string } } }) => {
+        args.toolContext!.signals!.orderLookup = 'missed'
+        return { text: 'Could you share your order number so I can check?', handoff: false }
+      },
+    )
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText.mock.calls[0][0].text).toBe(HOLDING)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  it('a sales conversation keeps its catalog tool and its address ask', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ enabledTools: ['send_product_catalog', 'create_draft_order'] }))
+    let offered: string[] = []
+    const ask = 'Please share your full name, address (line 1 + area), city, state, and 6-digit pincode.'
+    h.generateReply.mockImplementation(async (args: { tools?: Array<{ name: string }> }) => {
+      offered = (args.tools ?? []).map((t) => t.name)
+      return { text: ask, handoff: false }
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(offered).toEqual(expect.arrayContaining(['send_product_catalog', 'create_draft_order']))
+    expect(h.engineSendText.mock.calls[0][0].text).toBe(ask)
   })
 
   it('routes to the configured handoff agent on handoff', async () => {

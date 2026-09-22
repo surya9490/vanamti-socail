@@ -17,6 +17,7 @@ import {
   type SkipReason,
 } from '@/lib/ai/re-engagement'
 import { fetchRecentCustomerVerdict } from '@/lib/ai/recent-customer.server'
+import { fetchSupportSession } from '@/lib/ai/order-guard.server'
 
 const SESSION_WINDOW_HOURS = 24
 
@@ -286,6 +287,7 @@ export async function GET(request: Request): Promise<Response> {
       // has a customer message at all.
       let salesStage: ReturnType<typeof findSalesStage> = null
       let recentCustomer = false
+      let supportSession = false
       if (lastCustomerAt) {
         const sessionSince = new Date(
           new Date(lastCustomerAt).getTime() - SESSION_WINDOW_HOURS * 3_600_000,
@@ -334,6 +336,7 @@ export async function GET(request: Request): Promise<Response> {
           stageTemplateNames,
         })
         recentCustomer = recent.recent
+        supportSession = await fetchSupportSession(db, conversationId, now)
       }
 
       const verdict = evaluateThread(
@@ -342,6 +345,7 @@ export async function GET(request: Request): Promise<Response> {
           aiAutoreplyDisabled: conv.ai_autoreply_disabled,
           salesStage,
           recentCustomer,
+          supportSession,
           lastMessage: last
             ? {
                 senderType: last.sender_type,

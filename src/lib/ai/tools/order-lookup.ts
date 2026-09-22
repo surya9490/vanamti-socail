@@ -1,4 +1,5 @@
 import type { AiTool } from './registry'
+import { ORDER_HOLDING_MESSAGE } from '@/lib/ai/order-guard'
 import {
   LOOKUP_UNAVAILABLE,
   extractOrderNumber,
@@ -30,15 +31,13 @@ export function notFoundGuidance(orderNumber: string | null): string {
     'This does NOT mean they have no order: they may have ordered with another phone number or email, or typed the number slightly differently. ' +
     'NEVER say or imply "you have no order", "no order was placed", "it wasn\'t completed", and NEVER offer to place a new order, send the catalog or mention products — that panics a customer who has paid. ' +
     (orderNumber
-      ? 'They already gave an order number, so do not make them hunt again: reply with ONE calm line — "Let me get our team to check order ' +
-        orderNumber +
-        ' for you right away — you\'ll hear back here shortly 🙏" — and end your reply with [[HANDOFF]].'
-      : 'Reply calmly: ask for the order number exactly as in their confirmation (e.g. vana1073), or the phone number / email they used at checkout, so you can check it for them. If they already gave those and it still does not match, send the calm "our team will check" line and end with [[HANDOFF]].')
+      ? `They already gave an order number, so do not make them hunt again: reply with exactly "${ORDER_HOLDING_MESSAGE}" and end your reply with [[HANDOFF]].`
+      : `Reply with exactly "${ORDER_HOLDING_MESSAGE}" and end your reply with [[HANDOFF]] — a person will find the order (the customer may have used another phone number / email at checkout).`)
   )
 }
 
 export const LOOKUP_DOWN_GUIDANCE =
-  '[ORDER SYSTEM DID NOT RESPOND — instructions for you.] Do NOT say they have no order. Reply with ONE calm line — "Let me get our team to check this for you right away — you\'ll hear back here shortly 🙏" — and end your reply with [[HANDOFF]].'
+  `[ORDER SYSTEM DID NOT RESPOND — instructions for you.] Do NOT say they have no order. Reply with exactly "${ORDER_HOLDING_MESSAGE}" and end your reply with [[HANDOFF]].`
 
 // ============================================================
 // order_lookup tool — the conversational twin of the flow /
@@ -95,8 +94,19 @@ export const orderLookupTool: AiTool = {
         // path: the customer's WhatsApp phone is our identity.
         await fetchRecentOrders({ senderPhone: ctx.contactPhone })
 
-    if (!result) return LOOKUP_DOWN_GUIDANCE
-    if (!result.found) return notFoundGuidance(orderNumber)
+    // The order guard (lib/ai/order-guard.ts) reads this after the model
+    // replies: a miss or an outage ALWAYS becomes the holding line + a
+    // handoff, whatever the model wrote.
+    ctx.signals = ctx.signals ?? {}
+    if (!result) {
+      ctx.signals.orderLookup = 'down'
+      return LOOKUP_DOWN_GUIDANCE
+    }
+    if (!result.found) {
+      ctx.signals.orderLookup = 'missed'
+      return notFoundGuidance(orderNumber)
+    }
+    ctx.signals.orderLookup = result.delayed ? 'delayed' : 'found'
     return result.message + (result.delayed ? DELAYED_NOTE : CARE_NOTE)
   },
 }

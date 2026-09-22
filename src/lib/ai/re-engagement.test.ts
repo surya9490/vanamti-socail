@@ -88,6 +88,12 @@ describe('evaluateThread — sales stage and recent customer rails', () => {
     expect(evaluateThread({ ...quietWarmLead, salesStage: 'catalog_sent', recentCustomer: true }, opts)).toEqual({ eligible: false, reason: 'recent_customer' })
   })
 
+  it('never re-engages a support session — even mid-checkout (Zakir: "I have just ordered")', () => {
+    for (const stage of ['catalog', 'address_ask', 'payment_link_sent'] as const) {
+      expect(evaluateThread({ ...quietWarmLead, salesStage: stage, supportSession: true }, opts)).toEqual({ eligible: false, reason: 'support_session' })
+    }
+  })
+
   it('still re-engages a recent customer who was explicitly mid-checkout', () => {
     for (const stage of ['address_ask', 'address_confirm', 'payment_link_sent'] as const) {
       expect(evaluateThread({ ...quietWarmLead, salesStage: stage, recentCustomer: true }, opts).eligible).toBe(true)

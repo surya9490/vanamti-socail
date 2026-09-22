@@ -5,6 +5,11 @@ import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
 import { fetchRecentCustomerVerdict } from './recent-customer.server'
+import {
+  SALES_TOOL_NAMES,
+  enforceOrderRules,
+  isSupportSession,
+} from './order-guard'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
@@ -229,6 +234,24 @@ export async function dispatchInboundToAiReply(
     // number, on this thread within the window). Flips the prompt into
     // support mode — see lib/ai/recent-customer.ts for the why.
     const recentCustomer = await fetchRecentCustomerVerdict(db, conversationId, Date.now())
+
+    // SUPPORT session? The customer's latest intent-bearing message decides
+    // (existing order → support, wanting to buy → sales). In a support
+    // session the selling tools are withheld and the order guard blocks any
+    // new-purchase push — see lib/ai/order-guard.ts for the live incidents.
+    const { data: supportWindow } = await db
+      .from('messages')
+      .select('content_text')
+      .eq('conversation_id', conversationId)
+      .eq('sender_type', 'customer')
+      .eq('content_type', 'text')
+      .gte('created_at', new Date(Date.now() - 14 * 86_400_000).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(30)
+    const supportSession = isSupportSession(
+      ((supportWindow ?? []) as { content_text: string | null }[]).map((m) => m.content_text),
+      { recentCustomer: recentCustomer.recent },
+    )
 
     // Adaptive message-batch debounce.
     //
@@ -491,13 +514,18 @@ export async function dispatchInboundToAiReply(
             windowDays: recentCustomer.windowDays,
           }
         : null,
+      supportSession,
     })
 
     // Function-calling tools the account has switched on (e.g. order
     // lookup). Only build the tool context — including one extra query for
     // the contact's phone — when at least one tool is actually enabled, so
     // the common no-tools path stays as cheap as before.
-    const tools = getEnabledTools(config.enabledTools)
+    // Selling / money tools are simply not offered in a support session —
+    // the model can't send a catalog or a payment link it doesn't have.
+    const tools = getEnabledTools(config.enabledTools).filter(
+      (t) => !(supportSession && SALES_TOOL_NAMES.has(t.name)),
+    )
     let toolContext: ToolContext | undefined
     if (tools.length > 0) {
       const { data: toolContact } = await db
@@ -512,6 +540,7 @@ export async function dispatchInboundToAiReply(
         conversationId,
         contactId,
         contactPhone: (toolContact as { phone?: string } | null)?.phone ?? null,
+        signals: {},
       }
     }
 
@@ -536,7 +565,8 @@ export async function dispatchInboundToAiReply(
       tools,
       toolContext,
     })
-    const { handoff, usage } = generated
+    const { usage } = generated
+    let handoff = generated.handoff
 
     // Extract the lead-grade tag emitted by the model at the END of
     // its reply (per the grading rubric in defaults.ts) and strip
@@ -547,7 +577,31 @@ export async function dispatchInboundToAiReply(
     // reply that (against instructions) contains a grade tag still
     // gets the tag stripped before whatever comes next; the DB
     // update below is skipped when handoff=true.
-    const { grade, text } = extractGrade(generated.text)
+    const extracted = extractGrade(generated.text)
+    const { grade } = extracted
+    let text = extracted.text
+
+    // ORDER GUARD — the last word on what goes out (lib/ai/order-guard.ts).
+    // A failed order lookup, any "you have no order" claim, or a new-purchase
+    // push in a support session becomes the fixed holding line + a handoff
+    // to a person; a delayed order always hands off.
+    const guarded = enforceOrderRules({
+      text,
+      handoff,
+      lookup: toolContext?.signals?.orderLookup ?? null,
+      supportSession,
+    })
+    if (guarded.reason) {
+      log.info('auto_reply.order_guard', {
+        trace_id,
+        conversation_id: conversationId,
+        reason: guarded.reason,
+        support_session: supportSession,
+        blocked_text: guarded.text === text ? null : text.slice(0, 300),
+      })
+    }
+    text = guarded.text
+    handoff = guarded.handoff
 
     // Record token spend on the account's BYO key. Fire-and-forget so it
     // never adds latency to the customer-facing send: `logAiUsage`
