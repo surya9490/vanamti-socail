@@ -47,6 +47,19 @@ const ORDER_INTENT_PATTERNS: RegExp[] = [
   /\b(amount|money|payment)\s+(was\s+)?(debited|deducted|done|made|completed|paid)\b/i,
   /\b(order|parcel)\s+(is\s+)?(not|n't|still|yet)\b/i,
   /\b(it'?s\s+been|almost|already|past)\s+\d+\s+days?\b/i,
+  // Hinglish / Hindi — "mera order kab aayega", "order nahi aaya", "मेरा ऑर्डर"
+  /\b(mera|mere|meri|hamara|hamare|apna|humara)\s+(order|parcel|package|delivery|payment)\b/i,
+  /\border\s+(kab|kaha+n?|kidhar|kyu+n?|abhi\s+tak|nahi+|nhi|kahan|aayega|aaya|milega|mila|pahuncha|pohcha|hua)\b/i,
+  /(मेरा|मेरे|मेरी|हमारा)\s*(ऑर्डर|आर्डर|ओर्डर|पार्सल|डिलीवरी)|(ऑर्डर|आर्डर|ओर्डर)\s*(कब|कहाँ|कहां|नहीं|आया|आएगा|मिला|मिलेगा|पहुंचा)/,
+  // Tamil (Tanglish + script) — "en order enga irukku", "order varala"
+  /\b(en|enga|enakku|namma)\s+(order|parcel)\b/i,
+  /\border\s+(enga|eppo|eppadi|varum|varala|vanthuduchu|vandhucha|kedaikala|status\s+enna)\b/i,
+  /(என்|எங்க)\s*(ஆர்டர்|ஆர்டரை|பார்சல்)|ஆர்டர்\s*(எங்க|எப்போ|வரல|வந்துருச்சா|வந்தது)/,
+  // Telugu — "naa order eppudu vastundi", Kannada — "nanna order yavaga", Malayalam — "ente order evide"
+  /\b(naa|na|maa)\s+order\b|\border\s+(eppudu|ekkada|ravaledu|vachinda|vastundi)\b/i,
+  /\b(nanna|namma)\s+order\b|\border\s+(yavaga|elli|barlilla|bantha)\b/i,
+  /\b(ente|njangalude)\s+order\b|\border\s+(eppol|evide|vannilla|vanno)\b/i,
+  /(నా|మా)\s*ఆర్డర్|(ನನ್ನ|ನಮ್ಮ)\s*ಆರ್ಡರ್|(എന്റെ|ഞങ്ങളുടെ)\s*ഓർഡർ/,
 ]
 
 /** Signals that the customer wants to BUY something (new or repeat). */
@@ -59,6 +72,10 @@ const SALES_INTENT_PATTERNS: RegExp[] = [
   /\bcatalog(ue)?\b/i,
   /\b(price|cost|rate)\s+(of|for)\b|\bhow\s+much\s+(is|for|does|are|do)\b/i,
   /\b(discount|coupon|offer)s?\b/i,
+  // "do you have honey also?", "do you sell ghee?", "is 1 litre available?" —
+  // a product inquiry, unless the same sentence is about an order/parcel.
+  /\b(do|did)\s+you\s+(also\s+|guys\s+)?(have|sell|stock|make|keep)\b(?![^.?!\n]*\b(order|parcel|package|tracking|delivery|record)\b)/i,
+  /\b(is|are)\s+[^.?!\n]{0,40}\b(available|in\s+stock)\b(?![^.?!\n]*\b(order|parcel)\b)/i,
 ]
 
 export function hasOrderIntent(text: string | null | undefined): boolean {

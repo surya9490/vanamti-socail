@@ -25,6 +25,16 @@ describe('hasOrderIntent — existing-order messages seen live', () => {
     'Amount debited but no confirmation',
     'Where is my order',
     'I already paid',
+    // Indian languages, as customers actually type them
+    'mera order kab aayega',
+    'order nahi aaya abhi tak',
+    'मेरा ऑर्डर कब आएगा',
+    'en order enga irukku',
+    'order varala innum',
+    'என் ஆர்டர் எங்க',
+    'naa order eppudu vastundi',
+    'nanna order yavaga barutte',
+    'ente order evide',
   ])('%s', (text) => expect(hasOrderIntent(text)).toBe(true))
 
   it.each([
@@ -47,12 +57,18 @@ describe('hasSalesIntent', () => {
     'price of acacia honey?',
     'how much is the 1 litre ghee',
     'any discount?',
+    'Do you have honey also?',
+    'do you sell ghee?',
+    'is 1 litre ghee available?',
   ])('%s', (text) => expect(hasSalesIntent(text)).toBe(true))
 
-  it.each(['What happened to my order', 'I have just ordered half kg', 'how much time will delivery take for my order'])(
-    'not: %s',
-    (text) => expect(hasSalesIntent(text)).toBe(false),
-  )
+  it.each([
+    'What happened to my order',
+    'I have just ordered half kg',
+    'how much time will delivery take for my order',
+    'do you have my order details?',
+    'do you have any tracking for my parcel',
+  ])('not: %s', (text) => expect(hasSalesIntent(text)).toBe(false))
 })
 
 describe('isSupportSession (newest first)', () => {
@@ -66,6 +82,14 @@ describe('isSupportSession (newest first)', () => {
     expect(isSupportSession(['Yes', 'I want 2 more', 'my order arrived, loved it'])).toBe(false)
     expect(isSupportSession(['I ordered last week, now I want to order honey too'])).toBe(false)
   })
+  it('"my order was delivered, do you have honey also?" → a product inquiry, sales tools allowed', () => {
+    expect(isSupportSession(['My order was delivered yesterday, thanks! Do you have honey also?'])).toBe(false)
+  })
+  it('Hindi / Tamil order questions are support sessions', () => {
+    expect(isSupportSession(['mera order kab aayega'])).toBe(true)
+    expect(isSupportSession(['en order enga irukku'])).toBe(true)
+  })
+
   it('no intent at all: recent customers are support, prospects are not', () => {
     expect(isSupportSession(['Hi'], { recentCustomer: true })).toBe(true)
     expect(isSupportSession(['Hi'])).toBe(false)
