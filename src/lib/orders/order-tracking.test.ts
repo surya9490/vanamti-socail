@@ -36,6 +36,17 @@ describe('extractOrderNumber', () => {
     expect(extractOrderNumber('order #ABC123')).toBe('ABC123')
   })
 
+  it("reads this store's order names typed without the '#' (vana1073)", () => {
+    expect(extractOrderNumber('vana1073')).toBe('vana1073')
+    expect(extractOrderNumber('VANA1073')).toBe('VANA1073')
+    expect(extractOrderNumber('my order is vana 1073')).toBe('vana1073')
+    expect(extractOrderNumber('vana-1073 status?')).toBe('vana1073')
+    expect(extractOrderNumber('#vana1073')).toBe('vana1073')
+    expect(extractOrderNumber('# vana 1073')).toBe('vana1073')
+    // the prefix inside a longer word is not an order name
+    expect(extractOrderNumber('savana1073')).toBeNull()
+  })
+
   it('handles empty input', () => {
     expect(extractOrderNumber('')).toBeNull()
     expect(extractOrderNumber(null)).toBeNull()

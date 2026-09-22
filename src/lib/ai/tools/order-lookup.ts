@@ -2,10 +2,43 @@ import type { AiTool } from './registry'
 import {
   LOOKUP_UNAVAILABLE,
   extractOrderNumber,
-  fetchOrderStatusReply,
-  fetchRecentOrdersReply,
+  fetchOrderStatus,
+  fetchRecentOrders,
   orderTrackingConfigured,
 } from '@/lib/orders/order-tracking'
+
+/** The store's tracking page — customers can check any shipped order there. */
+export const TRACK_PAGE_URL = 'https://vanamati.com/apps/track123'
+
+// Tool results are read by the model, not sent verbatim. A miss is the
+// dangerous case: "no order found" read as "you have no order" made a
+// customer who HAD a 5-day-old order panic (live, 2026-09-22). So a miss
+// never comes back as bare copy — it comes back as instructions.
+
+const CARE_NOTE =
+  `\n\n[Customer-care mode: relay this status warmly in your own words. For tracking, the store's page is ${TRACK_PAGE_URL}. Do not pitch products or suggest a new order.]`
+
+const DELAYED_NOTE =
+  '\n\n[DELAYED ORDER — this order is past its promised dispatch time. Apologise sincerely in ONE short line, say our team is checking it now and will update them here shortly (do NOT promise a date), then end your reply with [[HANDOFF]] so a person expedites it. No products, no upsell.]'
+
+export function notFoundGuidance(orderNumber: string | null): string {
+  const what = orderNumber
+    ? `No order named "${orderNumber}" matched THIS customer's WhatsApp number.`
+    : "No order matched THIS customer's WhatsApp number."
+  return (
+    `[ORDER NOT MATCHED — instructions for you, not text to send.] ${what} ` +
+    'This does NOT mean they have no order: they may have ordered with another phone number or email, or typed the number slightly differently. ' +
+    'NEVER say or imply "you have no order", "no order was placed", "it wasn\'t completed", and NEVER offer to place a new order, send the catalog or mention products — that panics a customer who has paid. ' +
+    (orderNumber
+      ? 'They already gave an order number, so do not make them hunt again: reply with ONE calm line — "Let me get our team to check order ' +
+        orderNumber +
+        ' for you right away — you\'ll hear back here shortly 🙏" — and end your reply with [[HANDOFF]].'
+      : 'Reply calmly: ask for the order number exactly as in their confirmation (e.g. vana1073), or the phone number / email they used at checkout, so you can check it for them. If they already gave those and it still does not match, send the calm "our team will check" line and end with [[HANDOFF]].')
+  )
+}
+
+export const LOOKUP_DOWN_GUIDANCE =
+  '[ORDER SYSTEM DID NOT RESPOND — instructions for you.] Do NOT say they have no order. Reply with ONE calm line — "Let me get our team to check this for you right away — you\'ll hear back here shortly 🙏" — and end your reply with [[HANDOFF]].'
 
 // ============================================================
 // order_lookup tool — the conversational twin of the flow /
@@ -56,20 +89,14 @@ export const orderLookupTool: AiTool = {
     const raw = typeof args.order_number === 'string' ? args.order_number : ''
     const orderNumber = extractOrderNumber(raw)
 
-    if (orderNumber) {
-      const reply = await fetchOrderStatusReply({
-        orderNumber,
-        senderPhone: ctx.contactPhone,
-      })
-      return reply ?? LOOKUP_UNAVAILABLE
-    }
+    const result = orderNumber
+      ? await fetchOrderStatus({ orderNumber, senderPhone: ctx.contactPhone })
+      : // No order number → list recent orders by phone. Zero-friction
+        // path: the customer's WhatsApp phone is our identity.
+        await fetchRecentOrders({ senderPhone: ctx.contactPhone })
 
-    // No order number → list recent orders by phone. Zero-friction
-    // path: the customer's WhatsApp phone is our identity, we
-    // don't need to ask them for anything else.
-    const listReply = await fetchRecentOrdersReply({
-      senderPhone: ctx.contactPhone,
-    })
-    return listReply ?? LOOKUP_UNAVAILABLE
+    if (!result) return LOOKUP_DOWN_GUIDANCE
+    if (!result.found) return notFoundGuidance(orderNumber)
+    return result.message + (result.delayed ? DELAYED_NOTE : CARE_NOTE)
   },
 }

@@ -417,6 +417,23 @@ describe('dispatchInboundToAiReply — handoff', () => {
     expect(h.state.updatePayload).not.toHaveProperty('assigned_agent_id')
   })
 
+  // Order problems (a lookup miss, a delayed order): the customer gets one
+  // calm holding line BEFORE the thread goes to a person — silence after
+  // "where is my order?" reads as "there is no order".
+  it('sends the holding line, then hands off, when a handoff carries text', async () => {
+    h.generateReply.mockResolvedValue({
+      text: "Let me get our team to check order vana1049 for you right away — you'll hear back here shortly 🙏",
+      handoff: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText.mock.calls[0][0]).toMatchObject({
+      text: expect.stringContaining('our team to check order vana1049'),
+      aiGenerated: true,
+    })
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
   it('routes to the configured handoff agent on handoff', async () => {
     h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
     h.generateReply.mockResolvedValue({ text: '', handoff: true })

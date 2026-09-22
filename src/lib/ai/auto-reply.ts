@@ -568,6 +568,26 @@ export async function dispatchInboundToAiReply(
     })
 
     if (handoff || !text) {
+      // A handoff that carries a line of text is a HOLDING message ("let me
+      // get our team to check order vana1049 — you'll hear back shortly"):
+      // send it first so the customer isn't left in silence while a person
+      // picks the thread up. Used for order-lookup misses and delayed orders,
+      // where silence after "where is my order?" reads as "no order". A bare
+      // [[HANDOFF]] still hands off silently, as before.
+      if (handoff && text) {
+        try {
+          await engineSendText({
+            accountId,
+            userId: configOwnerUserId,
+            conversationId,
+            contactId,
+            text,
+            aiGenerated: true,
+          })
+        } catch (err) {
+          console.warn('[ai auto-reply] handoff holding message failed:', err)
+        }
+      }
       // The model can't (or shouldn't) answer — stop auto-replying on
       // this thread and hand it to a human. We (a) pause the bot here
       // (sticky until re-enabled), (b) route the conversation to the

@@ -45,8 +45,26 @@ export function orderTrackingConfigured(): boolean {
  * phone numbers by accident (E.164 numbers are longer and typically
  * carry non-digit prefixes like `+`).
  */
+/**
+ * The store's order-name prefix ("vana" → orders are named #vana1073).
+ * Customers usually type it WITHOUT the '#' ("vana1073", "VANA 1073"), which
+ * the #-form and the bare-digit form both miss — seen live 2026-09-22, when
+ * "vana1073" made the bot say the order didn't exist.
+ */
+const ORDER_NAME_PREFIX = (process.env.ORDER_NAME_PREFIX || 'vana').trim()
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 export function extractOrderNumber(text: string | null | undefined): string | null {
   if (!text) return null
+  if (ORDER_NAME_PREFIX) {
+    const prefixed = text.match(
+      new RegExp(`(?:^|[^A-Za-z0-9])#?\\s*(${escapeRegExp(ORDER_NAME_PREFIX)})\\s*[-#]?\\s*(\\d{3,12})\\b`, 'i'),
+    )
+    if (prefixed) return `${prefixed[1]}${prefixed[2]}`
+  }
   const hash = text.match(/#\s*([A-Za-z0-9][A-Za-z0-9-]{2,23})\b/)
   if (hash) return hash[1]
   const bare = text.match(/\b(\d{3,12})\b/)
@@ -62,6 +80,77 @@ export const LOOKUP_UNAVAILABLE =
 interface OrderStatusResponse {
   found: boolean
   message: string
+  /** Confirmed but unshipped past the promised dispatch window. */
+  delayed?: boolean
+}
+
+/** What a lookup returned — the AI tool needs `found` / `delayed`, not just text. */
+export interface OrderLookupResult {
+  found: boolean
+  message: string
+  delayed: boolean
+}
+
+/** Single-order lookup with its outcome. Null when the lookup could not run. */
+export async function fetchOrderStatus(params: {
+  orderNumber: string
+  senderPhone: string
+}): Promise<OrderLookupResult | null> {
+  if (!orderTrackingConfigured()) return null
+  try {
+    const url =
+      `${VANAMATI_APP_URL}/api/order-status` +
+      `?order=${encodeURIComponent(params.orderNumber)}` +
+      `&phone=${encodeURIComponent(params.senderPhone)}`
+    const resp = await fetch(url, {
+      headers: { 'x-api-key': VANAMATI_ORDER_STATUS_KEY },
+    })
+    // A 5xx is "couldn't check", never "not found".
+    if (resp.status >= 500) return null
+    const json = (await resp.json().catch(() => null)) as OrderStatusResponse | null
+    if (!json || typeof json.message !== 'string' || !json.message) return null
+    return { found: json.found === true, message: json.message, delayed: json.delayed === true }
+  } catch (error) {
+    console.error(
+      '[order-tracking] lookup failed:',
+      error instanceof Error ? error.message : error,
+    )
+    return null
+  }
+}
+
+/** Recent-orders-by-phone lookup with its outcome. Null when it could not run. */
+export async function fetchRecentOrders(params: {
+  senderPhone: string
+  limit?: number
+}): Promise<OrderLookupResult | null> {
+  if (!orderTrackingConfigured()) return null
+  try {
+    const qs = new URLSearchParams({ phone: params.senderPhone })
+    if (params.limit) qs.set('limit', String(params.limit))
+    const url = `${VANAMATI_APP_URL}/api/orders/by-phone?${qs.toString()}`
+    const resp = await fetch(url, {
+      headers: { 'x-api-key': VANAMATI_ORDER_STATUS_KEY },
+    })
+    if (resp.status >= 500) return null
+    const json = (await resp.json().catch(() => null)) as {
+      found?: boolean
+      message?: string
+      orders?: Array<{ delayed?: boolean }>
+    } | null
+    if (!json || typeof json.message !== 'string' || !json.message) return null
+    return {
+      found: json.found === true,
+      message: json.message,
+      delayed: (json.orders ?? []).some((o) => o?.delayed === true),
+    }
+  } catch (error) {
+    console.error(
+      '[order-tracking] by-phone lookup failed:',
+      error instanceof Error ? error.message : error,
+    )
+    return null
+  }
 }
 
 /**
