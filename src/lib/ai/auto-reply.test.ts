@@ -550,6 +550,28 @@ describe('dispatchInboundToAiReply — handoff', () => {
     expect(h.engineSendText.mock.calls[0][0].text).toBe(ask)
   })
 
+  // Live 2026-09-23: the Anthropic account ran out of credit and every
+  // customer got silence for 12 hours. A provider failure must never be silent.
+  it('AI provider failure → customer gets a holding line, thread goes to a human, AI paused', async () => {
+    h.generateReply.mockRejectedValue(new Error('Anthropic API error (400): Your credit balance is too low to access the Anthropic API.'))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText.mock.calls[0][0]).toMatchObject({
+      text: 'Thanks for your message! Our team will reply to you here shortly 🙏',
+      aiGenerated: true,
+    })
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('AI could not reply')
+    expect(h.state.updatePayload?.ai_handoff_summary).toContain('credit balance')
+  })
+
+  it('AI provider failure routes to the configured handoff agent', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
+    h.generateReply.mockRejectedValue(new Error('fetch failed'))
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true, assigned_agent_id: 'agent-7' })
+  })
+
   it('routes to the configured handoff agent on handoff', async () => {
     h.loadAiConfig.mockResolvedValue(aiConfig({ handoffAgentId: 'agent-7' }))
     h.generateReply.mockResolvedValue({ text: '', handoff: true })

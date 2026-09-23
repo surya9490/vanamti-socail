@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from './admin-client'
 import { loadAiConfig } from './config'
 import { buildConversationContext } from './context'
@@ -827,12 +828,19 @@ export async function dispatchInboundToAiReply(
       }
     }
   } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
     log.error('auto_reply.dispatch_failed', {
       trace_id,
       account_id: accountId,
       conversation_id: conversationId,
-      error: err instanceof Error ? err.message : String(err),
+      error,
     })
+    // The AI could not answer (provider outage, exhausted credits, a bug).
+    // Silence is the worst outcome — live 2026-09-23: the Anthropic account
+    // ran out of credit and customers wrote "hi" into nothing for 12 hours.
+    // Tell the customer a person will reply, route the thread to a human,
+    // and alert Slack. Never throws.
+    await failOverToHuman({ db: supabaseAdmin(), accountId, conversationId, contactId, configOwnerUserId, error, trace_id })
   }
 }
 
@@ -859,4 +867,101 @@ async function showTypingIndicator(
   } catch (err) {
     console.warn('[ai auto-reply] typing indicator failed (continuing):', err)
   }
+}
+
+/** What the customer sees when the AI itself is unavailable. */
+export const AI_UNAVAILABLE_MESSAGE =
+  'Thanks for your message! Our team will reply to you here shortly 🙏'
+
+/**
+ * Provider / pipeline failure → the customer is not left in silence and the
+ * thread is not left with the bot: one holding line (at most once in a row),
+ * AI paused with a summary that says why, routed to the handoff agent if one
+ * is configured, Slack alerted. Every step is best-effort.
+ */
+async function failOverToHuman(args: {
+  db: SupabaseClient
+  accountId: string
+  conversationId: string
+  contactId: string
+  configOwnerUserId: string
+  error: string
+  trace_id: string
+}): Promise<void> {
+  const { db, accountId, conversationId, contactId, configOwnerUserId, error, trace_id } = args
+  let told = false
+  let paused = false
+  try {
+    // Don't repeat the holding line if it is already the latest bot message
+    // (two inbounds racing into the same outage).
+    const { data: lastBot } = await db
+      .from('messages')
+      .select('content_text')
+      .eq('conversation_id', conversationId)
+      .eq('sender_type', 'bot')
+      .order('created_at', { ascending: false })
+      .limit(1)
+    const lastText = (lastBot as { content_text?: string | null }[] | null)?.[0]?.content_text
+    if (lastText !== AI_UNAVAILABLE_MESSAGE) {
+      await engineSendText({
+        accountId,
+        userId: configOwnerUserId,
+        conversationId,
+        contactId,
+        text: AI_UNAVAILABLE_MESSAGE,
+        aiGenerated: true,
+      })
+      told = true
+    }
+  } catch (sendErr) {
+    console.warn('[ai auto-reply] failover holding message failed:', sendErr)
+  }
+
+  try {
+    const cfg = await loadAiConfig(db, accountId).catch(() => null)
+    const { data: convRow } = await db
+      .from('conversations')
+      .select('assigned_agent_id')
+      .eq('id', conversationId)
+      .maybeSingle()
+    const update: Record<string, unknown> = {
+      ai_autoreply_disabled: true,
+      ai_autoreply_disabled_at: new Date().toISOString(),
+      ai_handoff_summary: `AI could not reply: ${error.slice(0, 300)}. Customer was told the team will respond — please reply.`,
+    }
+    if (cfg?.handoffAgentId && !(convRow as { assigned_agent_id?: string | null } | null)?.assigned_agent_id) {
+      update.assigned_agent_id = cfg.handoffAgentId
+    }
+    await db.from('conversations').update(update).eq('id', conversationId)
+    paused = true
+  } catch (pauseErr) {
+    console.warn('[ai auto-reply] failover pause failed:', pauseErr)
+  }
+
+  try {
+    const { data: contact } = await db
+      .from('contacts')
+      .select('name, phone')
+      .eq('id', contactId)
+      .maybeSingle()
+    const baseUrl = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/+$/, '')
+    await postSlackNotification(
+      buildHandoffSlackMessage({
+        contactName: (contact as { name?: string | null } | null)?.name ?? null,
+        contactPhone: (contact as { phone?: string | null } | null)?.phone ?? null,
+        lastCustomerMessage: null,
+        handoffSummary: `⚠️ AI COULD NOT REPLY — ${error.slice(0, 200)}. ${told ? 'Customer was told the team will respond.' : 'Customer has NOT been answered.'} Fix the cause (credits / provider) and reply.`,
+        inboxUrl: baseUrl ? `${baseUrl}/inbox?c=${conversationId}` : null,
+      }),
+    )
+  } catch (slackErr) {
+    console.warn('[ai auto-reply] failover slack notify failed:', slackErr)
+  }
+
+  log.warn('auto_reply.failover', {
+    trace_id,
+    conversation_id: conversationId,
+    told_customer: told,
+    paused_and_routed: paused,
+  })
 }
