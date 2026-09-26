@@ -17,7 +17,7 @@ export const TRACK_PAGE_URL = 'https://vanamati.com/apps/track123'
 // never comes back as bare copy — it comes back as instructions.
 
 const CARE_NOTE =
-  `\n\n[Customer-care mode: relay this status warmly in your own words. Quote the order number EXACTLY as written above (e.g. #vana1073), not as the customer typed it. For tracking, the store's page is ${TRACK_PAGE_URL}. Do NOT invent how they'll be notified — no "SMS", no "call": tracking details come by email and on the tracking page. Do not pitch products or suggest a new order.]`
+  `\n\n[Customer-care mode: relay this status warmly in your own words. Quote the order number EXACTLY as written above (e.g. #vana1073), not as the customer typed it. For tracking, the store's page is ${TRACK_PAGE_URL}. Do NOT invent how they'll be notified — no "SMS", no "call": tracking details come by email and on the tracking page. If the status lists some items delivered and others not yet shipped, explain both plainly — a customer asking about "one more" or "the other" item means the pending one, never a new purchase. Do not pitch products or suggest a new order.]`
 
 const DELAYED_NOTE =
   '\n\n[DELAYED ORDER — this order is past its promised dispatch time. Apologise sincerely in ONE short line, say our team is checking it now and will update them here shortly (do NOT promise a date), then end your reply with [[HANDOFF]] so a person expedites it. No products, no upsell.]'

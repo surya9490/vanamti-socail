@@ -39,7 +39,7 @@ export const FUTURE_ORDER_MESSAGE =
 
 /** Signals that the customer is talking about an order they already placed. */
 const ORDER_INTENT_PATTERNS: RegExp[] = [
-  /\b(i|we)('ve|\s+have|\s+had)?\s+(just\s+|already\s+|recently\s+)*(ordered|bought|purchased|paid|placed\s+(an?\s+|my\s+|the\s+)?order|made\s+(the\s+|a\s+)?payment)\b/i,
+  /\b(i|we)('ve|\s+have|\s+had)?\s+(just\s+|already\s+|recently\s+)*(ordered|booked|bought|purchased|paid|placed\s+(an?\s+|my\s+|the\s+)?order|made\s+(the\s+|a\s+)?payment)\b/i,
   /\b(my|our)\s+(order|parcel|package|delivery|shipment|payment|money)\b/i,
   /\border\s+(status|no\.?|number|id|details)\b/i,
   /\bstatus\s+of\s+(my|the|this|our|that)\b/i,
@@ -55,6 +55,7 @@ const ORDER_INTENT_PATTERNS: RegExp[] = [
   /\b(amount|money|payment)\s+(was\s+)?(debited|deducted|done|made|completed|paid)\b/i,
   /\b(order|parcel)\s+(is\s+)?(not|n't|still|yet)\b/i,
   /\b(it'?s\s+been|almost|already|past)\s+\d+\s+days?\b/i,
+  /\balready\s+(i\s+|we\s+)?(have\s+|had\s+)?(booked|ordered|paid|purchased|bought)\b/i,
   // Hinglish / Hindi — "mera order kab aayega", "order nahi aaya", "मेरा ऑर्डर"
   /\b(mera|mere|meri|hamara|hamare|apna|humara)\s+(order|parcel|package|delivery|payment)\b/i,
   /\border\s+(kab|kaha+n?|kidhar|kyu+n?|abhi\s+tak|nahi+|nhi|kahan|aayega|aaya|milega|mila|pahuncha|pohcha|hua)\b/i,
@@ -74,7 +75,7 @@ const ORDER_INTENT_PATTERNS: RegExp[] = [
 const SALES_INTENT_PATTERNS: RegExp[] = [
   /\b(want|would\s+like|wanna|like|wish)\s+to\s+(order|buy|purchase|try|get)\b/i,
   /\b(order|buy)\s+(again|more|another|one\s+more|some\s+more)\b/i,
-  /\bre-?order\b|\bnew\s+order\b|\banother\s+order\b|\bone\s+more\b/i,
+  /\bre-?order\b|\bnew\s+order\b|\banother\s+order\b/i,
   /\b(i|we)\s+(want|need|'?ll\s+take|will\s+take)\s+(\d|one|two|three|four|five|a|an|another|some|more|half|1)\b/i,
   /\b(send|share|show)\s+(me\s+)?(the\s+|your\s+)?(catalog|catalogue|products?|price\s*list|menu|range)\b/i,
   /\bcatalog(ue)?\b/i,
@@ -105,7 +106,7 @@ const FUTURE_INTENT_PATTERNS: RegExp[] = [
 
 /** Unmistakably about an order that already exists. */
 const STRONG_EXISTING_PATTERNS: RegExp[] = [
-  /\b(i|we)('ve|\s+have|\s+had)?\s+(just\s+|already\s+|recently\s+)*(ordered|bought|purchased|paid|placed\s+(an?\s+|my\s+|the\s+)?order|made\s+(the\s+|a\s+)?payment)\b/i,
+  /\b(i|we)('ve|\s+have|\s+had)?\s+(just\s+|already\s+|recently\s+)*(ordered|booked|bought|purchased|paid|placed\s+(an?\s+|my\s+|the\s+)?order|made\s+(the\s+|a\s+)?payment)\b/i,
   /\balready\b/i,
   /\b(status|tracking|track|courier|awb|consignment|shipped|dispatched|delivered|received|reached|arrived|debited|deducted|refund|replacement|cancel|damaged|leaking|leaked|broken|spoiled|missing)\b/i,
   /\bwhere\s+is\b|\bwhat\s+happened\b|\bwrong\s+(item|product|order)\b/i,
@@ -113,6 +114,32 @@ const STRONG_EXISTING_PATTERNS: RegExp[] = [
   /\b(it'?s\s+been|almost|past)\s+\d+\s+days?\b/i,
   /\b(mera|mere|meri|hamara|en|enga|naa|nanna|ente)\s+order\s+(kab|kaha+n?|nahi+|aaya|aayega|mila|milega|enga|eppo|varala|varum|eppudu|yavaga|evide)\b/i,
   /(ऑर्डर|आर्डर|ओर्डर)\s*(कब|कहाँ|कहां|नहीं|आया|आएगा|मिला|मिलेगा|पहुंचा)|ஆர்டர்\s*(எங்க|எப்போ|வரல|வந்துருச்சா|வந்தது)/,
+]
+
+/**
+ * "One more", "the other one", "remaining", "balance" — from a customer whose
+ * order shipped in parts, this is the item still on its way, not a purchase.
+ * Live 2026-09-26 (#vana1100): the A2 ghee had been delivered, the Iyappa
+ * ghee was still pending; "Till one more ghee i have to get it" was read as
+ * a reorder and the bot sold her another ghee.
+ */
+const PENDING_ITEM_PATTERNS: RegExp[] = [
+  /\b(one|1|two|2)\s+more\b/i,
+  /\b(the\s+)?(other|second|2nd|remaining|balance|pending|missing|rest\s+of\s+the|leftover|left\s+over)\s+(one|item|items|product|products|ghee|honey|jar|jars|bottle|bottles|parcel|packet|pack|order|part|half)\b/i,
+  /\banother\s+(one|ghee|honey|jar|bottle|item|product|parcel|packet|pack)\s+(is\s+)?(yet|still|not|pending|coming|to\s+come|to\s+get|to\s+receive)\b/i,
+  /\b(baaki|baki|bacha|aur\s+ek|innoru|innum\s+onnu|matha|inkoka|innondu)\b/i,
+]
+
+/** Talking about RECEIVING something, not buying it. */
+const RECEIVING_PATTERNS: RegExp[] = [
+  /\b(get|got|getting|receive|received|receiving|come|came|coming|arrive|arrived|arriving|reach|reached|deliver|delivered|delivery|waiting|wait|yet|still|till|until|pending|dispatch|dispatched|ship|shipped|sent|track)\b/i,
+  /\b(varala|varum|vanthucha|aaya|aayega|nahi\s+mila|milega|kab)\b/i,
+]
+
+/** "I want one more", "send 2 more please" — an explicit purchase, even with "more". */
+const BUY_MORE_PATTERNS: RegExp[] = [
+  /\b(want|need|order|buy|send|add|take|give|book|place|like)\b[^.?!\n]{0,24}\b(one|1|two|2|three|3|another|some)\s+more\b/i,
+  /\b(one|1|two|2|three|3|another|some)\s+more\b[^.?!\n]{0,24}\b(please|pls|plz|order|to\s+order|to\s+buy|book)\b/i,
 ]
 
 /** Looks like a NEW order being described: quantities, products, payment apps, an address. */
@@ -146,12 +173,22 @@ export function hasFutureIntent(text: string | null | undefined): boolean {
  *                   could be either → ask, don't guess
  *   none            filler or unrelated
  */
-export function classifyCustomerIntent(text: string | null | undefined): CustomerIntent {
+export function classifyCustomerIntent(
+  text: string | null | undefined,
+  opts: { recentCustomer?: boolean } = {},
+): CustomerIntent {
   const t = String(text ?? '')
   if (!t.trim()) return 'none'
   const strongExisting = STRONG_EXISTING_PATTERNS.some((re) => re.test(t))
   if (hasFutureIntent(t) && !strongExisting) return 'future_order'
+  if (BUY_MORE_PATTERNS.some((re) => re.test(t))) return 'sales'
   if (hasSalesIntent(t)) return 'sales'
+  // "one more ghee", "the other item": with a receiving verb, or from someone
+  // who ordered recently, it's the part of their order still to come.
+  if (PENDING_ITEM_PATTERNS.some((re) => re.test(t))) {
+    if (RECEIVING_PATTERNS.some((re) => re.test(t)) || opts.recentCustomer || strongExisting) return 'existing_order'
+    return 'ambiguous'
+  }
   if (hasOrderIntent(t)) {
     if (strongExisting) return 'existing_order'
     return PURCHASE_CUE_PATTERNS.some((re) => re.test(t)) ? 'ambiguous' : 'existing_order'
@@ -170,7 +207,7 @@ export function latestIntent(
   opts: { recentCustomer?: boolean } = {},
 ): CustomerIntent {
   for (const text of customerTexts) {
-    const intent = classifyCustomerIntent(text)
+    const intent = classifyCustomerIntent(text, opts)
     if (intent !== 'none') return intent
   }
   return opts.recentCustomer ? 'existing_order' : 'none'
@@ -178,7 +215,7 @@ export function latestIntent(
 
 export function hasSalesIntent(text: string | null | undefined): boolean {
   const t = String(text ?? '')
-  return SALES_INTENT_PATTERNS.some((re) => re.test(t))
+  return SALES_INTENT_PATTERNS.some((re) => re.test(t)) || BUY_MORE_PATTERNS.some((re) => re.test(t))
 }
 
 /**

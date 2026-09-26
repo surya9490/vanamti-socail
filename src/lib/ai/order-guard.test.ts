@@ -57,6 +57,7 @@ describe('hasSalesIntent', () => {
     'I want to order half kg ghee',
     'Order again please',
     'I want 2 more',
+    'send one more please',
     'send me the catalog',
     'price of acacia honey?',
     'how much is the 1 litre ghee',
@@ -133,6 +134,21 @@ describe('classifyCustomerIntent — ask, don\'t guess', () => {
     expect(classifyCustomerIntent(t)).toBe('sales'),
   )
   it.each(['Yes', 'ok', '👍', '', 'Hi'])('none: %s', (t) => expect(classifyCustomerIntent(t)).toBe('none'))
+
+  // Sumathy, live 2026-09-26: partial delivery, "one more" = the pending item
+  it('"one more" from a customer whose order shipped in parts is the pending item, not a sale', () => {
+    expect(classifyCustomerIntent('Till one more ghee i have to get it.')).toBe('existing_order')
+    expect(classifyCustomerIntent('one more ghee', { recentCustomer: true })).toBe('existing_order')
+    expect(classifyCustomerIntent('the other ghee not yet received')).toBe('existing_order')
+    expect(classifyCustomerIntent('only one packet came, balance item?')).toBe('existing_order')
+    expect(classifyCustomerIntent('Already i have booked it')).toBe('existing_order')
+    // no receiving words and not a recent customer → ask
+    expect(classifyCustomerIntent('one more ghee')).toBe('ambiguous')
+    // an explicit purchase stays a purchase, recent customer or not
+    expect(classifyCustomerIntent('I want one more ghee', { recentCustomer: true })).toBe('sales')
+    expect(classifyCustomerIntent('send 2 more please', { recentCustomer: true })).toBe('sales')
+    expect(latestIntent(['Till one more ghee i have to get it.'], { recentCustomer: true })).toBe('existing_order')
+  })
 
   it('latestIntent skips filler and takes the newest intent-bearing message', () => {
     expect(latestIntent(['Yes', 'NEXT WEEK MY ORDER PL WAIT', 'Best my order next week Ghee and Honey 1+1 kg'])).toBe('future_order')
