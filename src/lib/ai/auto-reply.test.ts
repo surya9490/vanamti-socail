@@ -537,6 +537,35 @@ describe('dispatchInboundToAiReply — handoff', () => {
     expect(h.state.updatePayload).not.toMatchObject({ ai_autoreply_disabled: true })
   })
 
+  it('"not received" after a delivered lookup → fixed apology line, handoff, AI paused (never neighbour-checking)', async () => {
+    h.state.recentInbounds = [{ created_at: new Date().toISOString(), content_type: 'text', content_text: 'I have not received my order' }]
+    h.loadAiConfig.mockResolvedValue(aiConfig({ enabledTools: ['order_lookup'] }))
+    h.generateReply.mockImplementation(
+      async (args: { toolContext?: { signals?: { orderLookup?: string; orderDelivered?: boolean } } }) => {
+        args.toolContext!.signals!.orderLookup = 'found'
+        args.toolContext!.signals!.orderDelivered = true
+        return { text: 'Our system shows it as delivered 🙏 Can you check with a neighbour who may have received it?', handoff: false }
+      },
+    )
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect(h.engineSendText.mock.calls[0][0].text).toMatch(/courier has marked it delivered/)
+    expect(h.state.updatePayload).toMatchObject({ ai_autoreply_disabled: true })
+  })
+
+  it('"not received" when the order is NOT delivered yet is an ordinary status question', async () => {
+    h.state.recentInbounds = [{ created_at: new Date().toISOString(), content_type: 'text', content_text: 'I have not received my order' }]
+    h.loadAiConfig.mockResolvedValue(aiConfig({ enabledTools: ['order_lookup'] }))
+    h.generateReply.mockImplementation(async (args: { toolContext?: { signals?: { orderLookup?: string; orderDelivered?: boolean } } }) => {
+      args.toolContext!.signals!.orderLookup = 'found'
+      args.toolContext!.signals!.orderDelivered = false
+      return { text: 'Your order #vana1073 is on its way — track it here: https://vanamati.com/apps/track123?nums=X', handoff: false }
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText.mock.calls[0][0].text).toMatch(/on its way/)
+    expect(h.state.updatePayload).not.toMatchObject({ ai_autoreply_disabled: true })
+  })
+
   it('a sales conversation keeps its catalog tool and its address ask', async () => {
     h.loadAiConfig.mockResolvedValue(aiConfig({ enabledTools: ['send_product_catalog', 'create_draft_order'] }))
     let offered: string[] = []

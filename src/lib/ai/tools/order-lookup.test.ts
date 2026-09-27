@@ -40,11 +40,13 @@ beforeEach(() => {
   vi.mocked(fetchOrderStatus).mockResolvedValue({
     found: true,
     delayed: false,
+    delivered: false,
     message: 'Order #1024 is out for delivery.',
   })
   vi.mocked(fetchRecentOrders).mockResolvedValue({
     found: true,
     delayed: false,
+    delivered: false,
     message:
       "Here are your 2 recent orders:\n\n📦 Order #1024 (Aug 25) — Shipped\n✅ Order #1005 (Aug 20) — Delivered",
   })
@@ -104,7 +106,7 @@ describe('orderLookupTool', () => {
   })
 
   it('a miss on a given number → instructions: never "no order", holding line + handoff', async () => {
-    vi.mocked(fetchOrderStatus).mockResolvedValue({ found: false, delayed: false, message: 'no match' })
+    vi.mocked(fetchOrderStatus).mockResolvedValue({ found: false, delayed: false, delivered: false, message: 'no match' })
     const result = await orderLookupTool.run({ order_number: 'vana1073' }, ctx())
     expect(result).toMatch(/ORDER NOT MATCHED/)
     expect(result).toMatch(/NEVER say or imply "you have no order"/)
@@ -115,7 +117,7 @@ describe('orderLookupTool', () => {
   })
 
   it('a miss with no number → holding line + handoff too (a person finds the order), never "no order"', async () => {
-    vi.mocked(fetchRecentOrders).mockResolvedValue({ found: false, delayed: false, message: 'none' })
+    vi.mocked(fetchRecentOrders).mockResolvedValue({ found: false, delayed: false, delivered: false, message: 'none' })
     const c = ctx()
     const result = await orderLookupTool.run({}, c)
     expect(result).toMatch(/ORDER NOT MATCHED/)
@@ -137,6 +139,7 @@ describe('orderLookupTool', () => {
     vi.mocked(fetchRecentOrders).mockResolvedValue({
       found: true,
       delayed: true,
+      delivered: false,
       message: 'Here is your recent order:\n\n⏳ Order #vana1049 (17 Sep) — Confirmed, dispatch delayed',
     })
     const result = await orderLookupTool.run({}, ctx())
@@ -152,7 +155,7 @@ describe('orderLookupTool', () => {
   })
 
   it('a miss for a FUTURE order or an UNCLEAR message never tells the model to hold or hand off', async () => {
-    vi.mocked(fetchRecentOrders).mockResolvedValue({ found: false, delayed: false, message: 'none' })
+    vi.mocked(fetchRecentOrders).mockResolvedValue({ found: false, delayed: false, delivered: false, message: 'none' })
     const fut = ctx({ signals: { customerIntent: 'future_order' } })
     const r1 = await orderLookupTool.run({}, fut)
     expect(r1).toMatch(/NONE WAS EXPECTED/)
@@ -162,5 +165,12 @@ describe('orderLookupTool', () => {
     const r2 = await orderLookupTool.run({}, amb)
     expect(r2).toContain('Just to confirm — are you asking about an order')
     expect(r2).not.toContain('[[HANDOFF]]')
+  })
+
+  it('flags a delivered order for the delivery-dispute rule', async () => {
+    vi.mocked(fetchOrderStatus).mockResolvedValue({ found: true, delayed: false, delivered: true, message: 'Your order #vana1048 was delivered on 21 Sept.' })
+    const c = ctx()
+    await orderLookupTool.run({ order_number: 'vana1048' }, c)
+    expect(c.signals?.orderDelivered).toBe(true)
   })
 })

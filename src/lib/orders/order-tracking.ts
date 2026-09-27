@@ -89,6 +89,8 @@ export interface OrderLookupResult {
   found: boolean
   message: string
   delayed: boolean
+  /** The courier has marked (part of) the order delivered. */
+  delivered: boolean
 }
 
 /** Single-order lookup with its outcome. Null when the lookup could not run. */
@@ -109,7 +111,13 @@ export async function fetchOrderStatus(params: {
     if (resp.status >= 500) return null
     const json = (await resp.json().catch(() => null)) as OrderStatusResponse | null
     if (!json || typeof json.message !== 'string' || !json.message) return null
-    return { found: json.found === true, message: json.message, delayed: json.delayed === true }
+    const status = (json as { status?: string }).status ?? ''
+    return {
+      found: json.found === true,
+      message: json.message,
+      delayed: json.delayed === true,
+      delivered: status === 'delivered' || status === 'partially_delivered',
+    }
   } catch (error) {
     console.error(
       '[order-tracking] lookup failed:',
@@ -136,13 +144,21 @@ export async function fetchRecentOrders(params: {
     const json = (await resp.json().catch(() => null)) as {
       found?: boolean
       message?: string
-      orders?: Array<{ delayed?: boolean }>
+      orders?: Array<{
+        delayed?: boolean
+        status?: string
+        split?: boolean
+        parcels?: Array<{ state?: string }>
+      }>
     } | null
     if (!json || typeof json.message !== 'string' || !json.message) return null
     return {
       found: json.found === true,
       message: json.message,
       delayed: (json.orders ?? []).some((o) => o?.delayed === true),
+      delivered: (json.orders ?? []).some(
+        (o) => o?.status === 'delivered' || (o?.parcels ?? []).some((p) => p?.state === 'delivered'),
+      ),
     }
   } catch (error) {
     console.error(

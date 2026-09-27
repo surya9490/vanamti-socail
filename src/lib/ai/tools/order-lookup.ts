@@ -122,6 +122,7 @@ export const orderLookupTool: AiTool = {
       return notFoundGuidance(orderNumber, ctx.signals.customerIntent)
     }
     ctx.signals.orderLookup = result.delayed ? 'delayed' : 'found'
+    ctx.signals.orderDelivered = result.delivered
     return result.message + (result.delayed ? DELAYED_NOTE : CARE_NOTE)
   },
 }

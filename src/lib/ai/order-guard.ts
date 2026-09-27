@@ -31,6 +31,15 @@ export const ORDER_HOLDING_MESSAGE =
 export const CLARIFY_MESSAGE =
   "Just to confirm — are you asking about an order you've already placed, or would you like to place a new one? 🌿"
 
+/**
+ * The courier says delivered, the customer says it never came. A person has
+ * to open the courier investigation — the bot only acknowledges and hands
+ * over. (Offline test 2026-09-27: 5 of 6 phrasings handed off, but "I have
+ * not received my order" got a "check with your neighbours" reply instead.)
+ */
+export const DELIVERY_DISPUTE_MESSAGE =
+  "I'm sorry to hear that. The courier has marked it delivered, so let me get our team to check with them right away — you'll hear back here shortly 🙏"
+
 /** Safety net when the model mishandles "I'll order next week". */
 export const FUTURE_ORDER_MESSAGE =
   "Sure, take your time 🌿 Just message me here whenever you're ready and I'll set it up for you right away."
@@ -151,6 +160,23 @@ const PURCHASE_CUE_PATTERNS: RegExp[] = [
 ]
 
 export type CustomerIntent = 'existing_order' | 'future_order' | 'ambiguous' | 'sales' | 'none'
+
+/** "not received", "nothing came", "shows delivered but…", "nahi mila", "varala". */
+const NOT_RECEIVED_PATTERNS: RegExp[] = [
+  /\b(not|never|n't|didn'?t|did\s+not|haven'?t|have\s+not|hasn'?t|has\s+not|no)\s+(yet\s+)?(been\s+)?(received|receive|got|get|delivered|arrived|reached|come|came)\b/i,
+  /\b(nothing|no\s+parcel|no\s+package|no\s+delivery|no\s+one)\s+(came|arrived|received|reached|delivered|has\s+come)\b/i,
+  /\bnot\s+delivered\b|\bwrong(ly)?\s+(marked|delivered|delivery)\b|\bmarked\s+(as\s+)?delivered\b|\bshows?\s+(as\s+)?delivered\b|\bfalse\s+delivery\b|\bfake\s+delivery\b/i,
+  /\bwho\s+(took|received|got|signed)\s+(my|the|it)\b|\bparcel\s+(is\s+)?missing\b|\bmissing\s+parcel\b|\bwhere\s+did\s+(you|they)\s+deliver\b/i,
+  /\bnahi\s+mila\b|\bnahi\s+aaya\b|\bmila\s+nahi\b|\baaya\s+nahi\b|\bnahi\s+pahuncha\b|\bnahi\s+pohcha\b/i,
+  /\bvarala\b|\bvaralai\b|\bkedaikala\b|\bkidaikkala\b|\bvanthu\s+sera(la|le)\b/i,
+  /नहीं\s*(मिला|आया|पहुंचा|पहुँचा)|(मिला|आया)\s*नहीं|வரல|கிடைக்கல|வரவில்லை/,
+]
+
+/** The customer says the parcel didn't reach them. */
+export function isDeliveryDispute(text: string | null | undefined): boolean {
+  const t = String(text ?? '')
+  return NOT_RECEIVED_PATTERNS.some((re) => re.test(t))
+}
 
 export function hasOrderIntent(text: string | null | undefined): boolean {
   const t = String(text ?? '')
@@ -283,6 +309,7 @@ export type GuardReason =
   | 'sold_in_unclear'
   | 'delayed_order'
   | 'future_order_fallback'
+  | 'delivery_dispute'
 
 /**
  * Final say on what goes out. The model's reply stands unless it breaks a
@@ -296,10 +323,18 @@ export function enforceOrderRules(input: {
   supportSession: boolean
   /** From latestIntent(); defaults to existing_order when in a support session. */
   intent?: CustomerIntent
+  /** The lookup found the order marked delivered, and the customer says it never came. */
+  deliveryDispute?: boolean
 }): { text: string; handoff: boolean; reason: GuardReason | null } {
   const intent = input.intent ?? (input.supportSession ? 'existing_order' : 'none')
   const hold = (reason: GuardReason) => ({ text: ORDER_HOLDING_MESSAGE, handoff: true, reason })
   const clarify = (reason: GuardReason) => ({ text: CLARIFY_MESSAGE, handoff: false, reason })
+
+  // Delivered on paper, not in their hands: always one fixed line and a
+  // person — never "check with your neighbours" from a bot.
+  if (input.deliveryDispute && input.lookup !== 'missed' && input.lookup !== 'down') {
+    return { text: DELIVERY_DISPUTE_MESSAGE, handoff: true, reason: 'delivery_dispute' }
+  }
 
   // A failed lookup means "a person checks" ONLY when the customer clearly
   // asked about an existing order. Unclear → ask. "I'll order next week" →

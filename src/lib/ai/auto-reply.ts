@@ -9,6 +9,7 @@ import { fetchRecentCustomerVerdict } from './recent-customer.server'
 import {
   SALES_TOOL_NAMES,
   enforceOrderRules,
+  isDeliveryDispute,
   latestIntent,
 } from './order-guard'
 import { buildHandoffSummary } from './handoff'
@@ -249,10 +250,11 @@ export async function dispatchInboundToAiReply(
       .gte('created_at', new Date(Date.now() - 14 * 86_400_000).toISOString())
       .order('created_at', { ascending: false })
       .limit(30)
-    const customerIntent = latestIntent(
-      ((supportWindow ?? []) as { content_text: string | null }[]).map((m) => m.content_text),
-      { recentCustomer: recentCustomer.recent },
-    )
+    const customerTexts = ((supportWindow ?? []) as { content_text: string | null }[]).map((m) => m.content_text)
+    const customerIntent = latestIntent(customerTexts, { recentCustomer: recentCustomer.recent })
+    // "Not received" in the latest message — checked against the lookup's
+    // "delivered" after generation (a delivery dispute always goes to a person).
+    const saysNotReceived = isDeliveryDispute(customerTexts[0])
     // Unclear messages are handled like support: selling tools withheld,
     // and the reply is a clarifying question — never a guess.
     const supportSession = customerIntent === 'existing_order' || customerIntent === 'ambiguous'
@@ -596,6 +598,10 @@ export async function dispatchInboundToAiReply(
       lookup: toolContext?.signals?.orderLookup ?? null,
       supportSession,
       intent: customerIntent,
+      deliveryDispute:
+        saysNotReceived &&
+        customerIntent === 'existing_order' &&
+        toolContext?.signals?.orderDelivered === true,
     })
     if (guarded.reason) {
       log.info('auto_reply.order_guard', {

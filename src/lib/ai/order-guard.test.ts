@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   CLARIFY_MESSAGE,
+  DELIVERY_DISPUTE_MESSAGE,
   FUTURE_ORDER_MESSAGE,
   ORDER_HOLDING_MESSAGE,
   claimsNoOrder,
@@ -8,6 +9,7 @@ import {
   enforceOrderRules,
   hasOrderIntent,
   hasSalesIntent,
+  isDeliveryDispute,
   isSupportSession,
   latestIntent,
   pushesNewPurchase,
@@ -163,6 +165,25 @@ describe('classifyCustomerIntent — ask, don\'t guess', () => {
   })
 })
 
+describe('isDeliveryDispute — "delivered" on paper, not in their hands', () => {
+  it.each([
+    'I have not received my order',
+    'It shows delivered but I did not get anything',
+    'Not delivered!! who took my parcel? this is cheating',
+    'delivered dikha raha hai lekin mujhe nahi mila',
+    'A2 ghee not received but you sent delivered message',
+    'nothing came yet',
+    'parcel is missing',
+    'order varala but status delivered',
+    'मुझे पार्सल नहीं मिला',
+  ])('%s', (t) => expect(isDeliveryDispute(t)).toBe(true))
+
+  it.each(['Received, thank you', 'Got it, thanks!', 'The jar arrived leaking', 'Where is my order', 'What happened to my order'])(
+    'not: %s',
+    (t) => expect(isDeliveryDispute(t)).toBe(false),
+  )
+})
+
 describe('claimsNoOrder — the real bad replies', () => {
   it.each([
     "I checked but couldn't find an order under this number, Zakir.",
@@ -244,6 +265,18 @@ describe('enforceOrderRules', () => {
   it('unclear message + purchase push → clarifying question, no handoff', () => {
     const r = enforceOrderRules({ text: 'Please share your full name, address (line 1 + area)…', handoff: false, lookup: null, supportSession: true, intent: 'ambiguous' })
     expect(r).toEqual({ text: CLARIFY_MESSAGE, handoff: false, reason: 'sold_in_unclear' })
+  })
+
+  it('delivery dispute → the fixed line and a person, whatever the model wrote', () => {
+    const r = enforceOrderRules({
+      text: 'Our system shows it as delivered 🙏 Can you check with anyone at home or a neighbour who may have received it?',
+      handoff: false, lookup: 'found', supportSession: true, intent: 'existing_order', deliveryDispute: true,
+    })
+    expect(r).toEqual({ text: DELIVERY_DISPUTE_MESSAGE, handoff: true, reason: 'delivery_dispute' })
+  })
+  it('a dispute with a MISSED lookup still gets the ordinary holding line', () => {
+    const r = enforceOrderRules({ text: 'x', handoff: false, lookup: 'missed', supportSession: true, intent: 'existing_order', deliveryDispute: true })
+    expect(r.reason).toBe('lookup_missed')
   })
 
   it('delayed order keeps the apology but always hands off', () => {
