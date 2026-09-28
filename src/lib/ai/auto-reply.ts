@@ -6,6 +6,7 @@ import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
 import { fetchRecentCustomerVerdict } from './recent-customer.server'
+import { displayNameForPrompt } from './customer-name'
 import {
   SALES_TOOL_NAMES,
   enforceOrderRules,
@@ -505,7 +506,7 @@ export async function dispatchInboundToAiReply(
       .eq('account_id', accountId)
       .maybeSingle()
     const contactName =
-      (contactRowForPrompt as { name?: string | null } | null)?.name ?? null
+      displayNameForPrompt((contactRowForPrompt as { name?: string | null } | null)?.name)
 
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,

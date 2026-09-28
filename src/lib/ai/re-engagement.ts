@@ -62,6 +62,17 @@ export interface SessionMessage {
 }
 
 /**
+ * Our reply said we don't sell what they asked for — "we don't carry a
+ * protein powder", "not in our catalogue". The conversation ended on a no;
+ * a "still thinking it over?" after that is an irritation, not a nudge.
+ * (Live 2026-09-28: a happy customer asked for protein powder and sathu
+ * mavu, was told no, and would otherwise have been re-engaged off the
+ * price list shown two messages earlier.)
+ */
+const UNAVAILABLE_REPLY_RE =
+  /\b(we|i)\s+(don'?t|do\s+not|currently\s+don'?t|unfortunately\s+don'?t)\s+(currently\s+)?(have|carry|sell|stock|offer|make)\b|\bnot\s+(in\s+our\s+)?(catalogue|catalog|range)\b|\bnot\s+(currently\s+)?available\b|\bwe\s+(only|mainly)\s+(focus\s+on|sell|make|do)\b/i
+
+/**
  * The strongest sales stage among OUR messages in the current session
  * — those sent after (the customer's last message − sessionHours).
  * Close-nudges and our own re-engagement sends are follow-ups, not
@@ -84,6 +95,7 @@ export function findSalesStage(
   const since =
     new Date(opts.lastCustomerAt).getTime() - (opts.sessionHours ?? 24) * 3_600_000
   let best: SalesStage | null = null
+  let newestOurs = true
   for (const m of messages) {
     if (m.senderType === 'customer') continue
     if (new Date(m.createdAt).getTime() < since) continue
@@ -95,6 +107,10 @@ export function findSalesStage(
       continue
     }
     if (m.contentType === 'text' && text && opts.ignoreTexts.has(text)) continue
+    // Messages arrive newest first: if the last thing we said was "we
+    // don't have that", the session is over — whatever came before it.
+    if (newestOurs && m.contentType === 'text' && UNAVAILABLE_REPLY_RE.test(text)) return null
+    newestOurs = false
     let stage: SalesStage | null = null
     if (m.contentType === 'interactive') stage = 'catalog'
     else if (m.contentType === 'text') stage = detectCloseStage(text)

@@ -145,6 +145,17 @@ describe('findSalesStage', () => {
     expect(findSalesStage(session, base)).toBeNull()
   })
 
+  it('a session that ended on "we don\'t have that" is not a sales stage (Ravishankar, 2026-09-28)', () => {
+    const session = [
+      msg({ id: 'a', contentText: "We don't have sathu mavu or kanji mavu in our catalogue right now, sorry! We currently focus on pure ghee and raw honey. Happy to help if you're looking for any of those 🌿", createdAt: at(0.5) }),
+      msg({ id: 'b', contentText: "We don't currently carry a protein powder — sorry about that!", createdAt: at(0.6) }),
+      msg({ id: 'c', contentText: "Here's what we've got 🌿\n• A2 Cow Ghee – ₹599 / 250ml\n• Iyappa Ghee – ₹349 / 250ml\n• Forest Honey – ₹549 / 250ml", createdAt: at(0.7) }),
+    ]
+    expect(findSalesStage(session, { ...base, lastCustomerAt: at(0.55) })).toBeNull()
+    // …but a price list as our LAST word is still a sales stage
+    expect(findSalesStage([session[2]], { ...base, lastCustomerAt: at(0.8) })).toBe('catalog_sent')
+  })
+
   it('never treats templates as a sales stage', () => {
     const session = [msg({ id: 't', contentType: 'template', templateName: 'reengage_day2', createdAt: at(1) })]
     expect(findSalesStage(session, base)).toBeNull()
