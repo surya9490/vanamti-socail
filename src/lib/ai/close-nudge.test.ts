@@ -152,6 +152,11 @@ describe('detectCloseStage', () => {
     ).toBe('catalog_sent')
   })
 
+  it('detects catalog_sent for the non-repeating reply line the prompt now asks for', () => {
+    expect(detectCloseStage('Take a look above 🌿 — which one would you like to know more about?')).toBe('catalog_sent')
+    expect(detectCloseStage('Which one would you like more info on? 🌿')).toBe('catalog_sent')
+  })
+
   it('detects catalog_sent when the bot lists the range as a TEXT price list', () => {
     // The fallback shape the AI uses instead of the catalog card —
     // seen live 2026-09-20: customer said "I have a question", the
@@ -245,6 +250,11 @@ describe('pickNextNudge', () => {
     expect(pickNextNudge('address_ask', 2)).toBeNull()
     expect(pickNextNudge('address_confirm', 2)).toBeNull()
     expect(pickNextNudge('payment_link_sent', 2)).toBeNull()
+  })
+
+  it('catalog_sent sends exactly ONE nudge (the 3h check-in covers "still deciding")', () => {
+    expect(pickNextNudge('catalog_sent', 0)).toMatchObject({ minutesAfter: 3, nudgeNumber: 1 })
+    expect(pickNextNudge('catalog_sent', 1)).toBeNull()
   })
 
   it('uses payment_link_sent slower cadence (3 min, 10 min)', () => {

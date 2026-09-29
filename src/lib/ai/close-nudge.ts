@@ -30,15 +30,14 @@ interface StageConfig {
 
 export const STAGE_CONFIG: Record<CloseStage, StageConfig> = {
   // Bot sent the product catalog / listed products, customer
-  // went quiet before picking anything. Prime moment for a sales
-  // nudge — a real agent would gently probe interest and suggest
-  // a starting point. Two varied messages so it doesn't feel
-  // scripted: probe first, then a low-pressure recommendation.
+  // went quiet before picking anything. ONE gentle probe a few
+  // minutes in; the hourly re-engagement check-in covers "still
+  // deciding?" hours later. (Two nudges plus the check-in was four
+  // messages after a single "hi" — user asked to drop one, 2026-09-29.)
   catalog_sent: {
-    nudgeMinutes: [3, 10],
+    nudgeMinutes: [3],
     messages: [
       'Take your time 🌿 If any of them caught your eye or you\'d like a suggestion, I\'m right here to help you pick.',
-      'If you\'re still deciding — a great place to start is our A2 Cow Ghee (customer favourite 🍯). Or tell me what you\'re looking for and I\'ll point you to the right one.',
     ],
   },
   // Bot asked for the shipping address, customer went quiet
@@ -108,7 +107,7 @@ const ADDRESS_ASK_RE =
 // Anti-loop: our catalog_sent nudges don't use "tap any product",
 // "our range", or "at Vanamati", so they can't self-match.
 const CATALOG_SENT_RE =
-  /(tap any product|take a look at (?:our|the) (?:range|catalog|catalogue)|here'?s what we have|here you go[^\n]*tap)/i
+  /(tap any product|take a look (?:above|at (?:our|the) (?:range|catalog|catalogue))|here'?s what we have|here you go[^\n]*tap)/i
 
 // The bot listed the range in TEXT instead of (or as a fallback to)
 // the catalog — "Here's a quick look at our range meanwhile: • Iyappa
@@ -126,7 +125,7 @@ const PRICE_LIST_RE = new RegExp(
   `(?:^|\\n)${PRICE_LIST_LINE}(?:\\n+${PRICE_LIST_LINE}){2,}`,
 )
 const RANGE_SHOWN_RE =
-  /((?:quick|brief) look at (?:our|the) (?:range|products|catalog|catalogue)|which one you'?d like (?:details|to know more))/i
+  /((?:quick|brief) look at (?:our|the) (?:range|products|catalog|catalogue)|which one (?:you'?d|would you|do you) like (?:details|to know more|to hear more|more info))/i
 
 // A price list that is really an ORDER SUMMARY ("Total ₹1,148 …
 // Shall I go ahead?") belongs to the close stages, never to
