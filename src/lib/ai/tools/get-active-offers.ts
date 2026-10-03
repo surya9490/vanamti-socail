@@ -74,6 +74,12 @@ function formatEnds(iso: string | null): string {
   return `, ends in ${hrs} hour${hrs === 1 ? '' : 's'}`
 }
 
+const WELCOME_RE = /^welcome/i
+
+function isWelcomeCode(c: { code: string; title: string | null }): boolean {
+  return WELCOME_RE.test(c.code) || WELCOME_RE.test(c.title ?? '')
+}
+
 function describeCampaign(c: NonNullable<OffersResponse['campaigns']>[number]): string {
   const min =
     c.min_purchase_rupees && c.min_purchase_rupees > 0
@@ -108,7 +114,7 @@ export const getActiveOffersTool: AiTool = {
   description:
     'Fetch the CURRENT discount codes for this customer from the store. ' +
     'Call this BEFORE quoting any discount, coupon, offer, or percentage — including when the customer asks "any discount?", "any offer?", "coupon code?", or when you want to sweeten a hesitant buyer or a COD objection. ' +
-    'Returns the shared first-order welcome code (if any) and a per-customer abandoned-cart code (if one is live). ' +
+    'Returns the shared first-order welcome code (only when the store has one switched on — often there is none), a per-customer abandoned-cart code (if one is live), and any public campaign codes. ' +
     'NEVER quote a discount from memory or from the knowledge base — website copy about "% off" is stale. Only quote what this tool returns.',
   parameters: {
     type: 'OBJECT',
@@ -160,7 +166,11 @@ export const getActiveOffersTool: AiTool = {
         )
       }
       for (const c of body.campaigns ?? []) {
-        if (c?.code) lines.push(describeCampaign(c))
+        // A welcome code is only live when the app returns it as
+        // `welcome` (feature switch on). Leftover WELCOME* codes still
+        // ACTIVE in Shopify (e.g. WELCOME10-9769) would otherwise leak
+        // through as "campaigns" after the welcome offer is switched off.
+        if (c?.code && !isWelcomeCode(c)) lines.push(describeCampaign(c))
       }
       if (lines.length === 0) {
         return 'No discount codes are live right now. Do not offer any code or percentage — lean on free shipping (every order, no minimum) and product value instead.'
