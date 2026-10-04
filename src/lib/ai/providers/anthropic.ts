@@ -86,6 +86,12 @@ function normalizeForAnthropic(messages: ChatMessage[]): AnthropicMessage[] {
     merged.length > 0
       ? merged
       : [{ role: 'user' as const, content: '(The customer has not sent a message yet.)' }]
+  // Current models reject a transcript that ends on `assistant` (it reads
+  // as prefill → 400). Happens when the agent drafts a follow-up after
+  // their own last message; ask for the next message explicitly.
+  if (source[source.length - 1].role === 'assistant') {
+    source.push({ role: 'user', content: '(No new customer message since the last reply. Write the next message to send.)' })
+  }
   return source.map((m) => ({ role: m.role, content: m.content }))
 }
 

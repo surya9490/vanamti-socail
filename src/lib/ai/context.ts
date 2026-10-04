@@ -87,3 +87,21 @@ export async function buildConversationContext(
   }
   return collapsed
 }
+
+/**
+ * Auto-reply only: make the transcript end on the customer. Messages are
+ * ordered by Meta's timestamp, but a webhook can land late — live
+ * 2026-10-04: "Call me" → "Please" (stamped 03:45:21) reached us after the
+ * bot had already answered "Call me" (03:45:23), so the transcript ended
+ * on the bot and Anthropic rejected it (400 "must end with a user
+ * message") → the thread failed over to a human. The latest customer turn
+ * is what this dispatch is answering, and from the bot's side it arrived
+ * after that reply — so move it to the end.
+ */
+export function endOnLatestCustomerTurn(messages: ChatMessage[]): ChatMessage[] {
+  if (messages.length === 0 || messages[messages.length - 1].role === 'user') return messages
+  let i = messages.length - 1
+  while (i >= 0 && messages[i].role !== 'user') i--
+  if (i < 0) return messages
+  return [...messages.slice(0, i), ...messages.slice(i + 1), messages[i]]
+}

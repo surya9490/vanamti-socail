@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { buildConversationContext } from './context'
+import { buildConversationContext, endOnLatestCustomerTurn } from './context'
 
 /** Minimal fake matching the query chain in buildConversationContext:
  *  from().select().eq().in().order().limit() → { data, error }. */
@@ -91,5 +91,35 @@ describe('buildConversationContext', () => {
       'conv-1',
     )
     expect(out).toEqual([{ role: 'assistant', content: 'plain' }])
+  })
+})
+
+describe('endOnLatestCustomerTurn', () => {
+  it('moves a late-arriving customer message after the reply that beat it (live 2026-10-04)', () => {
+    const out = endOnLatestCustomerTurn([
+      { role: 'assistant', content: 'Which one would you like?' },
+      { role: 'user', content: 'Call me' },
+      { role: 'user', content: 'Please' },
+      { role: 'assistant', content: 'I have no calling option…' },
+    ])
+    expect(out.map((m) => m.content)).toEqual([
+      'Which one would you like?',
+      'Call me',
+      'I have no calling option…',
+      'Please',
+    ])
+  })
+
+  it('leaves a transcript that already ends on the customer alone', () => {
+    const msgs = [
+      { role: 'assistant' as const, content: 'hi' },
+      { role: 'user' as const, content: 'price?' },
+    ]
+    expect(endOnLatestCustomerTurn(msgs)).toBe(msgs)
+  })
+
+  it('leaves a transcript with no customer turn alone', () => {
+    const msgs = [{ role: 'assistant' as const, content: 'welcome' }]
+    expect(endOnLatestCustomerTurn(msgs)).toBe(msgs)
   })
 })

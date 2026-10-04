@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from './admin-client'
 import { loadAiConfig } from './config'
-import { buildConversationContext } from './context'
+import { buildConversationContext, endOnLatestCustomerTurn } from './context'
 import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
@@ -186,7 +186,7 @@ export async function dispatchInboundToAiReply(
     // That catches the "hi hi hi" case without silencing legitimate
     // follow-ups.)
 
-    const messages = await buildConversationContext(db, conversationId)
+    const messages = endOnLatestCustomerTurn(await buildConversationContext(db, conversationId))
     if (messages.length === 0) return
 
     // Silence-gap detection for re-engagement greeting.
