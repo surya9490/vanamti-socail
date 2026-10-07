@@ -20,6 +20,8 @@ import { fetchRecentCustomerVerdict } from '@/lib/ai/recent-customer.server'
 import { fetchSupportSession } from '@/lib/ai/order-guard.server'
 
 const SESSION_WINDOW_HOURS = 24
+// Contact IDs per already-sent lookup — keeps the PostgREST URL small.
+const SENT_LOOKUP_CHUNK = 100
 
 // ============================================================
 // GET /api/cron/re-engagement
@@ -201,18 +203,31 @@ export async function GET(request: Request): Promise<Response> {
     if (contacts.length === 0) continue
 
     // Bulk-fetch already-sent (contact_id, stage_id) pairs for
-    // this account so per-contact loops don't re-query.
+    // this account so per-contact loops don't re-query. Chunked:
+    // hundreds of UUIDs in one `.in()` overflow the request URL and
+    // the fetch fails. Fail closed — an unreadable send log would
+    // otherwise re-send every stage to every contact each hour.
     const stageIds = accountStages.map((s) => s.id)
     const contactIds = contacts.map((c) => c.id)
-    const { data: sentRows } = await db
-      .from('contact_re_engagement_sends')
-      .select('contact_id, stage_id')
-      .eq('account_id', accountId)
-      .in('stage_id', stageIds)
-      .in('contact_id', contactIds)
-    const sentSet = new Set(
-      ((sentRows ?? []) as SentPair[]).map((r) => `${r.contact_id}:${r.stage_id}`),
-    )
+    const sentSet = new Set<string>()
+    let sentLookupFailed = false
+    for (let i = 0; i < contactIds.length; i += SENT_LOOKUP_CHUNK) {
+      const { data: sentRows, error: sentErr } = await db
+        .from('contact_re_engagement_sends')
+        .select('contact_id, stage_id')
+        .eq('account_id', accountId)
+        .in('stage_id', stageIds)
+        .in('contact_id', contactIds.slice(i, i + SENT_LOOKUP_CHUNK))
+      if (sentErr) {
+        sentLookupFailed = true
+        console.error(`[re-engagement] sends lookup failed account=${accountId}:`, sentErr)
+        break
+      }
+      for (const r of (sentRows ?? []) as SentPair[]) {
+        sentSet.add(`${r.contact_id}:${r.stage_id}`)
+      }
+    }
+    if (sentLookupFailed) continue
 
     const now = startedAt.getTime()
 
@@ -457,12 +472,18 @@ export async function GET(request: Request): Promise<Response> {
               templateParams: [],
             })
           }
-          await db.from('contact_re_engagement_sends').insert({
+          const { error: recordErr } = await db.from('contact_re_engagement_sends').insert({
             contact_id: contact.id,
             stage_id: stage.id,
             account_id: accountId,
             sent_at: nowIso,
           })
+          if (recordErr) {
+            console.error(
+              `[re-engagement] sent but not recorded contact=${contact.id} stage=${stage.id}:`,
+              recordErr,
+            )
+          }
           sent += 1
           perStageSent[stage.id] = (perStageSent[stage.id] ?? 0) + 1
         } catch (err) {
