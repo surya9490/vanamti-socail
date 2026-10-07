@@ -60,6 +60,18 @@ interface OffersResponse {
     min_purchase_rupees: number | null
     ends_at: string | null
   }>
+  /** Automatic discounts (spend tiers): no code, they apply on their
+   *  own once the cart subtotal is reached — website cart and the
+   *  draft orders create_draft_order makes alike. */
+  automatic?: Array<{
+    title: string | null
+    kind: 'percent' | 'amount' | 'free_shipping' | 'free_gift'
+    value: number | null
+    min_purchase_rupees: number | null
+    gift: string | null
+    gift_variant_id: string | null
+    ends_at: string | null
+  }>
 }
 
 function formatEnds(iso: string | null): string {
@@ -99,6 +111,27 @@ function describeCampaign(c: NonNullable<OffersResponse['campaigns']>[number]): 
   return `CAMPAIGN code: ${c.code} — ${what}${min}${title}${formatEnds(c.ends_at)}. Open to everyone.`
 }
 
+function describeAutomatic(a: NonNullable<OffersResponse['automatic']>[number]): string | null {
+  const min =
+    a.min_purchase_rupees && a.min_purchase_rupees > 0
+      ? `on orders of ₹${a.min_purchase_rupees}+`
+      : 'on every order'
+  if (a.kind === 'free_gift' && a.gift) {
+    const variant = a.gift_variant_id ? ` (variant id ${a.gift_variant_id})` : ''
+    return `FREE GIFT ${min}: 1 × ${a.gift} free, on top of the % off${formatEnds(a.ends_at)}. When creating an order that is already ₹${a.min_purchase_rupees}+ WITHOUT the gift, add 1 × ${a.gift}${variant} as a line item — it is charged ₹0. Don't add it to smaller orders.`
+  }
+  const what =
+    a.kind === 'percent' && a.value != null
+      ? `${a.value}% off`
+      : a.kind === 'amount' && a.value != null
+        ? `₹${a.value} off`
+        : a.kind === 'free_shipping'
+          ? 'free shipping'
+          : null
+  if (!what) return null
+  return `AUTOMATIC: ${what} ${min}${formatEnds(a.ends_at)}. No code needed — it applies by itself.`
+}
+
 function formatExpiry(iso: string): string {
   const ms = new Date(iso).getTime() - Date.now()
   if (!Number.isFinite(ms) || ms <= 0) return 'expiring now'
@@ -114,7 +147,7 @@ export const getActiveOffersTool: AiTool = {
   description:
     'Fetch the CURRENT discount codes for this customer from the store. ' +
     'Call this BEFORE quoting any discount, coupon, offer, or percentage — including when the customer asks "any discount?", "any offer?", "coupon code?", or when you want to sweeten a hesitant buyer or a COD objection. ' +
-    'Returns the shared first-order welcome code (only when the store has one switched on — often there is none), a per-customer abandoned-cart code (if one is live), and any public campaign codes. ' +
+    'Returns the shared first-order welcome code (only when the store has one switched on — often there is none), a per-customer abandoned-cart code (if one is live), any public campaign codes, and the automatic spend tiers (e.g. % off above a cart value, a free gift) that need no code. ' +
     'NEVER quote a discount from memory or from the knowledge base — website copy about "% off" is stale. Only quote what this tool returns.',
   parameters: {
     type: 'OBJECT',
@@ -171,6 +204,15 @@ export const getActiveOffersTool: AiTool = {
         // ACTIVE in Shopify (e.g. WELCOME10-9769) would otherwise leak
         // through as "campaigns" after the welcome offer is switched off.
         if (c?.code && !isWelcomeCode(c)) lines.push(describeCampaign(c))
+      }
+      const tiers = (body.automatic ?? [])
+        .map(describeAutomatic)
+        .filter((l): l is string => Boolean(l))
+      if (tiers.length > 0) {
+        lines.push(...tiers)
+        lines.push(
+          'The automatic % tiers do not stack — the highest one the cart reaches applies. Use them to nudge: if a cart is a little under the next tier, say how much more unlocks it (e.g. "add ₹350 more and you get 5% off"). Never promise a tier the cart has not reached.',
+        )
       }
       if (lines.length === 0) {
         return 'No discount codes are live right now. Do not offer any code or percentage — lean on free shipping (every order, no minimum) and product value instead.'
