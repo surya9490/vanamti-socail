@@ -22,6 +22,7 @@ import { BroadcastError, type BroadcastPlan } from '@/lib/whatsapp/broadcast-cor
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { resolveTemplateRow } from '@/lib/whatsapp/template-body';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
+import { idChunks } from '@/lib/supabase/id-chunks';
 
 /** Which recipients a resume pass picks up. */
 export type ResumeScope = 'pending' | 'failed' | 'all';
@@ -182,14 +183,18 @@ export async function planBroadcastResume(
     if (isValidE164(sanitized)) sendable.push(row);
     else unsendable.push(row.id);
   }
-  if (unsendable.length > 0) {
-    await db
+  // Chunked so a large backlog doesn't overflow the request URL.
+  for (const ids of idChunks(unsendable)) {
+    const { error: stampErr } = await db
       .from('broadcast_recipients')
       .update({
         status: 'failed',
         error_message: 'No valid phone number on contact',
       })
-      .in('id', unsendable);
+      .in('id', ids);
+    if (stampErr) {
+      console.error('[broadcast-resume] failed to stamp unsendable recipients:', stampErr.message);
+    }
   }
 
   const slice = sendable.slice(0, RESUME_MAX_PER_REQUEST);

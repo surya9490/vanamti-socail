@@ -18,10 +18,9 @@ import {
 } from '@/lib/ai/re-engagement'
 import { fetchRecentCustomerVerdict } from '@/lib/ai/recent-customer.server'
 import { fetchSupportSession } from '@/lib/ai/order-guard.server'
+import { idChunks } from '@/lib/supabase/id-chunks'
 
 const SESSION_WINDOW_HOURS = 24
-// Contact IDs per already-sent lookup — keeps the PostgREST URL small.
-const SENT_LOOKUP_CHUNK = 100
 
 // ============================================================
 // GET /api/cron/re-engagement
@@ -211,13 +210,13 @@ export async function GET(request: Request): Promise<Response> {
     const contactIds = contacts.map((c) => c.id)
     const sentSet = new Set<string>()
     let sentLookupFailed = false
-    for (let i = 0; i < contactIds.length; i += SENT_LOOKUP_CHUNK) {
+    for (const ids of idChunks(contactIds)) {
       const { data: sentRows, error: sentErr } = await db
         .from('contact_re_engagement_sends')
         .select('contact_id, stage_id')
         .eq('account_id', accountId)
         .in('stage_id', stageIds)
-        .in('contact_id', contactIds.slice(i, i + SENT_LOOKUP_CHUNK))
+        .in('contact_id', ids)
       if (sentErr) {
         sentLookupFailed = true
         console.error(`[re-engagement] sends lookup failed account=${accountId}:`, sentErr)

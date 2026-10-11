@@ -8,6 +8,7 @@ import {
   batchRetryDelayMs,
 } from '@/lib/broadcast-retry';
 import { normalizeKey } from '@/lib/contacts/dedupe';
+import { idChunks } from '@/lib/supabase/id-chunks';
 import { Contact, MessageTemplate } from '@/types';
 
 export type CustomFieldOperator = 'is' | 'is_not' | 'contains';
@@ -138,15 +139,16 @@ async function fetchCustomValueIndex(
   const index: CustomValueIndex = new Map();
   if (contactIds.length === 0) return index;
 
-  // Supabase PostgREST caps the .in(...) IN-clause roughly at 1000
-  // values. Page through to stay safe.
-  const PAGE = 500;
-  for (let i = 0; i < contactIds.length; i += PAGE) {
-    const slice = contactIds.slice(i, i + PAGE);
-    const { data } = await supabase
+  // Chunked — a long .in(...) overflows the request URL. Throw on
+  // failure: a silent miss would send the broadcast with blank
+  // custom-field variables.
+  for (const slice of idChunks(contactIds)) {
+    const { data, error } = await supabase
       .from('contact_custom_values')
       .select('contact_id, custom_field_id, value')
       .in('contact_id', slice);
+    if (error)
+      throw new Error(`Failed to fetch custom field values: ${error.message}`);
 
     for (const row of data ?? []) {
       const bucket = index.get(row.contact_id) ?? new Map<string, string>();
@@ -155,6 +157,23 @@ async function fetchCustomValueIndex(
     }
   }
   return index;
+}
+
+/** Load full contact rows for an id list, chunked to keep URLs short. */
+async function fetchContactsByIds(
+  supabase: ReturnType<typeof createClient>,
+  contactIds: string[],
+): Promise<Contact[]> {
+  const contacts: Contact[] = [];
+  for (const slice of idChunks(contactIds)) {
+    const { data, error } = await supabase
+      .from('contacts')
+      .select('*')
+      .in('id', slice);
+    if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
+    contacts.push(...((data ?? []) as Contact[]));
+  }
+  return contacts;
 }
 
 export function useBroadcastSending(): UseBroadcastSendingReturn {
@@ -188,12 +207,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
         const uniqueContactIds = [
           ...new Set(contactTags.map((ct) => ct.contact_id)),
         ];
-        const { data, error } = await supabase
-          .from('contacts')
-          .select('*')
-          .in('id', uniqueContactIds);
-        if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
-        contacts = data ?? [];
+        contacts = await fetchContactsByIds(supabase, uniqueContactIds);
       }
     } else if (audience.type === 'custom_field' && audience.customField) {
       contacts = await resolveCustomFieldAudience(supabase, audience.customField);
@@ -336,12 +350,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
     const contactIds = [...new Set((matches ?? []).map((m) => m.contact_id))];
     if (contactIds.length === 0) return [];
 
-    const { data, error } = await supabase
-      .from('contacts')
-      .select('*')
-      .in('id', contactIds);
-    if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
-    return data ?? [];
+    return fetchContactsByIds(supabase, contactIds);
   }
 
   async function createAndSendBroadcast(payload: BroadcastPayload): Promise<string> {
