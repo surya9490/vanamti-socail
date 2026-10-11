@@ -383,6 +383,36 @@ export async function sendTextMessage(
   return { messageId: data.messages[0].id }
 }
 
+export interface SendRawMessageArgs {
+  phoneNumberId: string
+  accessToken: string
+  to: string
+  /**
+   * A Graph API message body without `messaging_product` / `to` —
+   * e.g. `{ type: 'interactive', interactive: { type: 'order_details', … } }`.
+   * For message shapes built elsewhere (the Vanamati app builds the
+   * WhatsApp Pay order cards and address forms) and sent as they are.
+   */
+  message: { type: string } & Record<string, unknown>
+}
+
+export async function sendRawMessage(args: SendRawMessageArgs): Promise<MetaSendResult> {
+  const { phoneNumberId, accessToken, to, message } = args
+  const response = await fetch(`${META_API_BASE}/${phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ messaging_product: 'whatsapp', ...recipientFields(to), ...message }),
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+  const data = await response.json()
+  return { messageId: data.messages[0].id }
+}
+
 export type MediaKind = 'image' | 'video' | 'document' | 'audio'
 
 export interface SendMediaMessageArgs {

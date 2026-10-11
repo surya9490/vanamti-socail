@@ -17,6 +17,11 @@ import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
+import {
+  handleAddressReply,
+  handleCatalogCart,
+  handlePaymentStatus,
+} from '@/lib/orders/whatsapp-pay'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import {
   handleTemplateWebhookChange,
@@ -73,9 +78,15 @@ interface WhatsAppMessage {
    * to advance the per-contact run.
    */
   interactive?: {
-    type: 'button_reply' | 'list_reply'
+    type: 'button_reply' | 'list_reply' | 'nfm_reply'
     button_reply?: { id: string; title: string }
     list_reply?: { id: string; title: string; description?: string }
+    /**
+     * A native form sent back — for us, WhatsApp's India address form
+     * (`name: 'address_message'`), answered with WhatsApp Pay's order
+     * card. `response_json` is a JSON string of the form's values.
+     */
+    nfm_reply?: { name?: string; response_json?: string; body?: string }
   }
   /**
    * Set when the customer taps a QUICK_REPLY button on a *template*
@@ -146,6 +157,14 @@ interface WhatsAppWebhookEntry {
          * (migration 028 + 060). See #535.
          */
         errors?: MetaStatusError[]
+        /**
+         * `'payment'` for WhatsApp Pay status events — not a message
+         * status at all: `id` is a webhook id, `status` is
+         * pending/captured, and `payment` carries the reference id and
+         * the Razorpay transaction. Relayed to the Vanamati app.
+         */
+        type?: string
+        payment?: unknown
       }>
     }
     field: string
@@ -311,6 +330,10 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       // Handle status updates
       if (value.statuses) {
         for (const status of value.statuses) {
+          if (status.type === 'payment') {
+            await relayPaymentStatus(status, value.metadata.phone_number_id)
+            continue
+          }
           await handleStatusUpdate(status)
         }
       }
@@ -382,6 +405,43 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       }
     }
   }
+}
+
+/**
+ * A WhatsApp Pay status event → the Vanamati app, which checks it with
+ * Razorpay, completes the order, and hands back the order-card update
+ * to send. Resolves the account from the receiving number and the
+ * contact from the payer's phone, the same way inbound messages do.
+ */
+async function relayPaymentStatus(
+  status: { recipient_id: string },
+  phoneNumberId: string,
+) {
+  const { data: configRows } = await supabaseAdmin()
+    .from('whatsapp_config')
+    .select('account_id, user_id')
+    .eq('phone_number_id', phoneNumberId)
+  if (!configRows || configRows.length !== 1) {
+    console.error('[whatsapp-pay] no single config for phone_number_id:', phoneNumberId)
+    return
+  }
+  const { account_id: accountId, user_id: ownerUserId } = configRows[0]
+  const contactOutcome = await findOrCreateContact(accountId, ownerUserId, {
+    phone: normalizePhone(status.recipient_id),
+    waUserId: null,
+    waParentUserId: null,
+    waUsername: null,
+    name: '',
+  })
+  if (!contactOutcome) return
+  const convResult = await findOrCreateConversation(accountId, ownerUserId, contactOutcome.contact.id)
+  if (!convResult) return
+  await handlePaymentStatus({
+    accountId,
+    conversationId: convResult.conversation.id,
+    contactId: contactOutcome.contact.id,
+    status,
+  })
 }
 
 // The happy-path status ladder — pending → sent → delivered → read →
@@ -985,7 +1045,36 @@ async function processMessage(
   // the account has enabled it. Awaited inside `after()` (same reason as
   // the webhook dispatch below); `dispatchInboundToAiReply` owns its
   // eligibility gates + try/catch and never throws.
-  if (!flowConsumed && !interactiveReplyId && inboundText.trim()) {
+  // WhatsApp Pay (the Vanamati app decides; off = carry on as before).
+  // A catalog cart gets the address form; the address form's reply gets
+  // the "Review and pay" card. Either way the AI must not answer too.
+  let whatsappPayHandled = false
+  if (!flowConsumed) {
+    const payTarget = {
+      accountId,
+      conversationId: conversation.id,
+      contactId: contactRecord.id,
+      phone: identity.phone,
+    }
+    if (message.type === 'order' && message.order?.product_items?.length) {
+      whatsappPayHandled = await handleCatalogCart({
+        ...payTarget,
+        name: identity.name || null,
+        order: message.order,
+      })
+    } else if (
+      message.interactive?.type === 'nfm_reply' &&
+      message.interactive.nfm_reply?.name === 'address_message' &&
+      message.interactive.nfm_reply.response_json
+    ) {
+      whatsappPayHandled = await handleAddressReply({
+        ...payTarget,
+        responseJson: message.interactive.nfm_reply.response_json,
+      })
+    }
+  }
+
+  if (!flowConsumed && !whatsappPayHandled && !interactiveReplyId && inboundText.trim()) {
     await dispatchInboundToAiReply({
       accountId,
       conversationId: conversation.id,
@@ -1171,6 +1260,16 @@ async function parseMessageContent(
       return { ...empty, contentText: message.reaction?.emoji || null }
 
     case 'interactive': {
+      // WhatsApp's address form sent back (WhatsApp Pay). The readable
+      // `body` is what the inbox shows; processMessage relays the
+      // values to the app.
+      if (message.interactive?.type === 'nfm_reply') {
+        const nfm = message.interactive.nfm_reply
+        return {
+          ...empty,
+          contentText: nfm?.body ? `[Address] ${nfm.body}` : '[Form reply]',
+        }
+      }
       // The customer tapped a reply button or a list row on a message
       // we previously sent. Meta delivers `interactive.button_reply` for
       // 3-button messages and `interactive.list_reply` for list messages.

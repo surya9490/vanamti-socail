@@ -4,6 +4,7 @@ import {
   sendInteractiveList,
   sendMediaMessage,
   sendProductListMessage,
+  sendRawMessage,
   sendTextMessage,
   type CarouselCard,
   type InteractiveButton,
@@ -169,6 +170,91 @@ export async function engineSendText(
     .from('conversations')
     .update({
       last_message_text: args.text,
+      last_message_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', args.conversationId)
+
+  return { whatsapp_message_id: waMessageId }
+}
+
+interface SendRawEngineArgs {
+  accountId: string
+  conversationId: string
+  contactId: string
+  /** A Graph API message body without `messaging_product` / `to`. */
+  message: { type: string } & Record<string, unknown>
+  /** What the inbox shows for it — the raw shapes (order cards, address
+   *  forms) have no renderer of their own. */
+  summaryText: string
+}
+
+/**
+ * Send a message body built elsewhere — WhatsApp Pay's address form,
+ * order card and status updates come ready-made from the Vanamati app.
+ * Same phone-variant retry + persistence as engineSendText; stored as a
+ * text row carrying `summaryText`.
+ */
+export async function engineSendRawMessage(
+  args: SendRawEngineArgs,
+): Promise<{ whatsapp_message_id: string }> {
+  const db = supabaseAdmin()
+
+  const { data: contact, error: contactErr } = await db
+    .from('contacts')
+    .select('id, phone, wa_user_id')
+    .eq('id', args.contactId)
+    .eq('account_id', args.accountId)
+    .maybeSingle()
+  if (contactErr || !contact) {
+    throw new Error('contact not found for this account')
+  }
+  const sendTarget = resolveContactSendTarget(contact)
+  if (!sendTarget) {
+    throw new Error(
+      `contact has no usable WhatsApp address (phone: ${contact.phone || 'none'})`
+    )
+  }
+  const sanitized = sendTarget.target
+  const { phoneNumberId, accessToken } = await loadAccountMetaCredentials(db, args.accountId)
+
+  const variants = sendTarget.isPhone ? phoneVariants(sanitized) : [sanitized]
+  let workingPhone = sanitized
+  let waMessageId = ''
+  let lastError: unknown = null
+  for (const v of variants) {
+    try {
+      waMessageId = (await sendRawMessage({ phoneNumberId, accessToken, to: v, message: args.message })).messageId
+      workingPhone = v
+      lastError = null
+      break
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (!isRecipientNotAllowedError(msg)) throw err
+      lastError = err
+    }
+  }
+  if (lastError) throw lastError
+
+  if (sendTarget.isPhone && workingPhone !== sanitized) {
+    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
+  }
+
+  const { error: msgErr } = await db.from('messages').insert({
+    conversation_id: args.conversationId,
+    sender_type: 'bot',
+    content_type: 'text',
+    content_text: args.summaryText,
+    message_id: waMessageId,
+    status: 'sent',
+  })
+  if (msgErr) {
+    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+  }
+  await db
+    .from('conversations')
+    .update({
+      last_message_text: args.summaryText,
       last_message_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
