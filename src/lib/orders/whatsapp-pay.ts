@@ -11,6 +11,7 @@ import { engineSendRawMessage } from '@/lib/flows/meta-send'
 //   catalog cart (order msg)  → POST /api/whatsapp-pay/cart     → address form
 //   address form reply        → POST /api/whatsapp-pay/checkout → order card + checkout button
 //   payment status webhook    → POST /api/whatsapp-pay/status   → "confirmed" card update
+//   "Pay by UPI" / "gpay"…    → POST /api/whatsapp-pay/reply    → Razorpay UPI link (+ QR)
 //
 // Switched on/off in the app (Payments → "WhatsApp Pay for catalog
 // carts"). When it's off, unreachable, or errors, these return false
@@ -60,6 +61,13 @@ async function callApp<T>(path: string, body: unknown): Promise<T | null> {
 export function summarizeGraphMessage(message: GraphMessage): string {
   if (message.type === 'text') {
     return String((message.text as { body?: string } | undefined)?.body ?? '')
+  }
+  if (message.type === 'image') {
+    const image = message.image as { caption?: string } | undefined
+    return `[UPI QR] ${image?.caption ?? ''}`.trim()
+  }
+  if ((message.interactive as { type?: string } | undefined)?.type === 'button') {
+    return `${(message.interactive as { body?: { text?: string } }).body?.text ?? ''}\n[Pay by UPI]`
   }
   const interactive = (message.interactive ?? {}) as {
     type?: string
@@ -153,5 +161,41 @@ export async function handlePaymentStatus(args: Target & { status: unknown }): P
     await sendAll(args, result?.messages)
   } catch (err) {
     console.error('[whatsapp-pay] sending the order update failed:', err)
+  }
+}
+
+/** The app's "Pay by UPI" reply-button ids. */
+const UPI_BUTTON_PREFIX = 'wapay:upi:'
+
+/**
+ * Worth asking the app about? A "Pay by UPI" tap, or a short message
+ * naming a UPI app. Everything else skips the round trip.
+ */
+export function mightAskForUpi(text: string | null | undefined, buttonId: string | null | undefined): boolean {
+  if (buttonId?.startsWith(UPI_BUTTON_PREFIX)) return true
+  const t = String(text ?? '').trim().toLowerCase()
+  return t.length > 0 && t.length <= 40 && /\b(upi|gpay|g pay|google ?pay|phone ?pe|paytm|bhim|qr|scan)\b/.test(t)
+}
+
+/**
+ * "Pay by UPI" tapped, or "gpay" / "phonepe" / "upi" typed. True when the
+ * customer has an order waiting and the app sent its UPI link (and QR) —
+ * the AI must not answer too. False otherwise: the AI handles it as usual.
+ */
+export async function handlePayReply(
+  args: Target & { phone: string; text: string | null; buttonId: string | null },
+): Promise<boolean> {
+  if (!args.phone || !mightAskForUpi(args.text, args.buttonId)) return false
+  const result = await callApp<{ handled?: boolean; messages?: GraphMessage[] }>('/api/whatsapp-pay/reply', {
+    phone: args.phone,
+    text: args.text,
+    button_id: args.buttonId,
+  })
+  if (!result?.handled) return false
+  try {
+    return await sendAll(args, result.messages)
+  } catch (err) {
+    console.error('[whatsapp-pay] sending the UPI link failed:', err)
+    return false
   }
 }

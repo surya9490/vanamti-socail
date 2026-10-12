@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/flows/meta-send', () => ({ engineSendRawMessage: vi.fn() }))
 
-import { handleCatalogCart, summarizeGraphMessage } from './whatsapp-pay'
+import { handleCatalogCart, mightAskForUpi, summarizeGraphMessage } from './whatsapp-pay'
 
 describe('summarizeGraphMessage', () => {
   it('labels the WhatsApp Pay shapes for the inbox', () => {
@@ -28,5 +28,15 @@ describe('handleCatalogCart', () => {
       order: { product_items: [{ product_retailer_id: '1', quantity: 1 }] },
     })
     expect(handled).toBe(false)
+  })
+})
+
+describe('mightAskForUpi', () => {
+  it('only round-trips for a Pay by UPI tap or a UPI app name', () => {
+    expect(mightAskForUpi(null, 'wapay:upi:abc')).toBe(true)
+    expect(mightAskForUpi('gpay', null)).toBe(true)
+    expect(mightAskForUpi('PhonePe please', null)).toBe(true)
+    expect(mightAskForUpi('hello', null)).toBe(false)
+    expect(mightAskForUpi(null, 'menu:1')).toBe(false)
   })
 })

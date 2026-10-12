@@ -21,6 +21,7 @@ import {
   handleAddressReply,
   handleCatalogCart,
   handlePaymentStatus,
+  handlePayReply,
 } from '@/lib/orders/whatsapp-pay'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import {
@@ -1070,6 +1071,14 @@ async function processMessage(
       whatsappPayHandled = await handleAddressReply({
         ...payTarget,
         responseJson: message.interactive.nfm_reply.response_json,
+      })
+    } else if (message.type === 'text' || interactiveReplyId) {
+      // "Pay by UPI" tapped, or "gpay" / "phonepe" typed, while an order
+      // is waiting: the app answers with its UPI link (and QR).
+      whatsappPayHandled = await handlePayReply({
+        ...payTarget,
+        text: message.text?.body ?? null,
+        buttonId: interactiveReplyId ?? null,
       })
     }
   }
