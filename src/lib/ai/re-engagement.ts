@@ -15,7 +15,11 @@
 //   * the customer has written at least once (a broadcast-only
 //     contact isn't "silent", they never spoke)
 //   * the last message is OURS — if the customer's message is the
-//     latest, they're waiting on us, not the other way round
+//     latest, they're waiting on us, not the other way round. A bare
+//     "ok" / "thanks" doesn't count as waiting: the AI deliberately
+//     leaves those unanswered (closing.ts), and they're the quiet party.
+//   * the customer hasn't said no ("not interested", "no thanks",
+//     "vendam" — closing.ts)
 //   * the last message isn't a transactional template (order
 //     confirmation, review request, cart recovery, …) — that
 //     customer is in a post-purchase / app-driven flow. Our own
@@ -36,6 +40,7 @@
 // ============================================================
 
 import { detectCloseStage, type CloseStage } from './close-nudge'
+import { isBareAcknowledgment } from './closing'
 
 export type SalesStage = CloseStage | 'catalog'
 
@@ -128,11 +133,14 @@ export interface ThreadSnapshot {
   recentCustomer: boolean
   /** From isSupportSession(): latest intent is about an existing order. */
   supportSession?: boolean
+  /** From customerDeclined(): the customer's latest say was a no. */
+  customerDeclined?: boolean
   /** Most recent message on the thread, any sender. */
   lastMessage: {
     senderType: string | null
     contentType: string | null
     templateName: string | null
+    contentText?: string | null
   } | null
   /** ISO timestamp of the customer's most recent message. */
   lastCustomerMessageAt: string | null
@@ -147,6 +155,7 @@ export type SkipReason =
   | 'no_sales_stage'
   | 'recent_customer'
   | 'support_session'
+  | 'customer_declined'
   | 'too_old'
 
 export type ThreadVerdict =
@@ -172,7 +181,11 @@ export function evaluateThread(
     return { eligible: false, reason: 'no_customer_message' }
   }
   const last = snap.lastMessage
-  if (!last || last.senderType === 'customer') {
+  if (
+    !last ||
+    (last.senderType === 'customer' &&
+      !(last.contentType === 'text' && isBareAcknowledgment(last.contentText)))
+  ) {
     return { eligible: false, reason: 'awaiting_our_reply' }
   }
   if (
@@ -183,6 +196,9 @@ export function evaluateThread(
   }
   if (snap.supportSession) {
     return { eligible: false, reason: 'support_session' }
+  }
+  if (snap.customerDeclined) {
+    return { eligible: false, reason: 'customer_declined' }
   }
   if (!snap.salesStage) {
     return { eligible: false, reason: 'no_sales_stage' }

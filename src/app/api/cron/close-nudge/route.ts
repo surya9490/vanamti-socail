@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { fetchRecentCustomerVerdict } from '@/lib/ai/recent-customer.server'
 import { fetchSupportSession } from '@/lib/ai/order-guard.server'
+import { fetchCustomerDeclined } from '@/lib/ai/closing.server'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { detectCloseStage, pickNextNudge, STAGE_CONFIG } from '@/lib/ai/close-nudge'
 
@@ -24,6 +25,7 @@ import { detectCloseStage, pickNextNudge, STAGE_CONFIG } from '@/lib/ai/close-nu
 //     means a human is handling, don't step on their toes)
 //   * conversations.status = 'open'
 //   * Contact has NOT opted out
+//   * The customer has NOT said no (lib/ai/closing.ts)
 //   * The most recent MESSAGE in the thread is a BOT message
 //     whose text matches one of the stage patterns
 //   * No customer inbound has arrived since that bot message
@@ -162,6 +164,14 @@ export async function GET(request: Request): Promise<Response> {
     // sent to them, and a follow-up asking for money compounds it.
     if (await fetchSupportSession(db, bot.conversation_id, now.getTime())) {
       console.log(`[close-nudge] conv=${bot.conversation_id} support session — no nudge`)
+      skipped += 1
+      continue
+    }
+
+    // The customer said no ("not interested", "no thanks", "vendam"). Our
+    // reply to that may still read like a stage; no follow-up either way.
+    if (await fetchCustomerDeclined(db, bot.conversation_id)) {
+      console.log(`[close-nudge] conv=${bot.conversation_id} customer declined — no nudge`)
       skipped += 1
       continue
     }

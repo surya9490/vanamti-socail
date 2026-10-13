@@ -18,6 +18,7 @@ import {
 } from '@/lib/ai/re-engagement'
 import { fetchRecentCustomerVerdict } from '@/lib/ai/recent-customer.server'
 import { fetchSupportSession } from '@/lib/ai/order-guard.server'
+import { customerDeclined } from '@/lib/ai/closing'
 import { idChunks } from '@/lib/supabase/id-chunks'
 
 const SESSION_WINDOW_HOURS = 24
@@ -273,7 +274,7 @@ export async function GET(request: Request): Promise<Response> {
       const [{ data: lastAny }, { data: lastInbound }] = await Promise.all([
         db
           .from('messages')
-          .select('sender_type, content_type, template_name')
+          .select('sender_type, content_type, template_name, content_text')
           .eq('conversation_id', conversationId)
           .order('created_at', { ascending: false })
           .limit(1)
@@ -291,6 +292,7 @@ export async function GET(request: Request): Promise<Response> {
         sender_type: string | null
         content_type: string | null
         template_name: string | null
+        content_text: string | null
       } | null
       const lastCustomerAt =
         (lastInbound as { created_at: string } | null)?.created_at ?? null
@@ -302,6 +304,7 @@ export async function GET(request: Request): Promise<Response> {
       let salesStage: ReturnType<typeof findSalesStage> = null
       let recentCustomer = false
       let supportSession = false
+      let declined = false
       if (lastCustomerAt) {
         const sessionSince = new Date(
           new Date(lastCustomerAt).getTime() - SESSION_WINDOW_HOURS * 3_600_000,
@@ -351,6 +354,11 @@ export async function GET(request: Request): Promise<Response> {
         })
         recentCustomer = recent.recent
         supportSession = await fetchSupportSession(db, conversationId, now)
+        declined = customerDeclined(
+          session
+            .filter((m) => m.senderType === 'customer' && m.contentType === 'text')
+            .map((m) => m.contentText),
+        )
       }
 
       const verdict = evaluateThread(
@@ -360,11 +368,13 @@ export async function GET(request: Request): Promise<Response> {
           salesStage,
           recentCustomer,
           supportSession,
+          customerDeclined: declined,
           lastMessage: last
             ? {
                 senderType: last.sender_type,
                 contentType: last.content_type,
                 templateName: last.template_name,
+                contentText: last.content_text,
               }
             : null,
           lastCustomerMessageAt: lastCustomerAt,

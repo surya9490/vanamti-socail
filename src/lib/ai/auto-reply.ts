@@ -13,6 +13,7 @@ import {
   isDeliveryDispute,
   latestIntent,
 } from './order-guard'
+import { isClosingAckTurn } from './closing'
 import { buildHandoffSummary } from './handoff'
 import { logAiUsage } from './usage'
 import { latestUserMessage } from './query'
@@ -418,6 +419,34 @@ export async function dispatchInboundToAiReply(
       } catch (err) {
         console.warn('[ai auto-reply] slack media-handoff notify failed:', err)
       }
+      return
+    }
+
+    // A bare "ok" / "thanks" / 👍 after we've already said our piece gets
+    // no reply — answering each one is a ping-pong of sign-offs (see
+    // closing.ts for the live case). An "ok" to a question, a checkout
+    // step or a catalog still goes to the model.
+    const { data: tailRows } = await db
+      .from('messages')
+      .select('sender_type, content_type, content_text')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false })
+      .limit(12)
+    const tail = ((tailRows ?? []) as {
+      sender_type: string | null
+      content_type: string | null
+      content_text: string | null
+    }[]).map((m) => ({
+      senderType: m.sender_type,
+      contentType: m.content_type,
+      contentText: m.content_text,
+    }))
+    if (isClosingAckTurn(tail)) {
+      log.info('auto_reply.skipped', {
+        trace_id,
+        reason: 'closing_ack',
+        conversation_id: conversationId,
+      })
       return
     }
 

@@ -18,6 +18,10 @@
 //   * an order number mentioned by either side within the window
 //     ("#vana1061") — covers the case where the confirmation
 //     template failed to send (e.g. still pending Meta review)
+//   * the customer saying they received it ("received ghee, thank
+//     you", "order received tq") — covers a buyer writing from another
+//     number than the one on the order, whose thread has no templates
+//     at all (live 2026-10-13, #vana1153)
 //
 // The window is 10 days by default (RECENT_CUSTOMER_DAYS).
 // ============================================================
@@ -29,6 +33,8 @@ export interface RecentCustomerMessage {
   content_type: string | null
   template_name: string | null
   content_text: string | null
+  /** Only the customer's own "received" counts. */
+  sender_type?: string | null
 }
 
 /** Templates that only ever go to someone who has placed an order. */
@@ -40,6 +46,22 @@ const NOT_A_PURCHASE_TEMPLATE_RE = /(cart|abandon|welcome|recover)/i
 /** Order numbers as Shopify names them for this store ("#vana1061"). */
 const ORDER_NUMBER_RE = /#?\bvana\d{3,}\b/i
 
+/**
+ * The customer says their order arrived. Needs the thing received (or the
+ * message to open with it) — "have you received my payment?" is a buyer
+ * mid-checkout, not one whose order came.
+ */
+const RECEIVED_PATTERNS: RegExp[] = [
+  /^\s*(?:received|recieved|recived|reseived)\b/i,
+  /\b(?:i|we)\s+(?:(?:have|had|just|already)\s+)*(?:received|recieved|recived|got)\s+(?:the\s+|my\s+|our\s+|your\s+)?(?:order|parcel|product|package|ghee|honey|oil|items?|delivery|courier)\b/i,
+  /\b(?:order|parcel|product|package|ghee|honey|items?)\s+(?:received|recieved|recived|reached|arrived)\b/i,
+]
+
+export function saysOrderReceived(text: string | null | undefined): boolean {
+  const t = String(text ?? '')
+  return RECEIVED_PATTERNS.some((re) => re.test(t))
+}
+
 export function isTransactionalTemplate(name: string | null | undefined): boolean {
   if (!name) return false
   return TRANSACTIONAL_TEMPLATE_RE.test(name) && !NOT_A_PURCHASE_TEMPLATE_RE.test(name)
@@ -48,7 +70,7 @@ export function isTransactionalTemplate(name: string | null | undefined): boolea
 export interface RecentCustomerVerdict {
   recent: boolean
   /** What tripped it, for logs. */
-  signal: 'transactional_template' | 'order_number' | null
+  signal: 'transactional_template' | 'order_number' | 'customer_received' | null
   /** ISO time of the signal message. */
   at: string | null
 }
@@ -72,6 +94,12 @@ export function detectRecentCustomer(
     if (m.content_text && ORDER_NUMBER_RE.test(m.content_text)) {
       if (!best.at || t > new Date(best.at).getTime()) {
         best = { recent: true, signal: 'order_number', at: m.created_at }
+      }
+      continue
+    }
+    if (m.sender_type === 'customer' && saysOrderReceived(m.content_text)) {
+      if (!best.at || t > new Date(best.at).getTime()) {
+        best = { recent: true, signal: 'customer_received', at: m.created_at }
       }
     }
   }

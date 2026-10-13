@@ -21,7 +21,7 @@ export async function fetchRecentCustomerVerdict(
   try {
     const { data, error } = await db
       .from('messages')
-      .select('created_at, content_type, template_name, content_text')
+      .select('created_at, content_type, template_name, content_text, sender_type')
       .eq('conversation_id', conversationId)
       .gte('created_at', since)
       .order('created_at', { ascending: false })

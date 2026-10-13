@@ -5,6 +5,7 @@ const NOW = Date.parse('2026-09-21T10:00:00Z')
 const daysAgo = (d: number) => new Date(NOW - d * 24 * 3_600_000).toISOString()
 const tpl = (name: string, d: number) => ({ created_at: daysAgo(d), content_type: 'template', template_name: name, content_text: null })
 const text = (body: string, d: number) => ({ created_at: daysAgo(d), content_type: 'text', template_name: null, content_text: body })
+const said = (body: string, d: number) => ({ ...text(body, d), sender_type: 'customer' })
 
 describe('isTransactionalTemplate', () => {
   it('recognises order / delivery / review templates', () => {
@@ -46,5 +47,20 @@ describe('detectRecentCustomer', () => {
 
   it('does not trip on the word "order" in ordinary text', () => {
     expect(detectRecentCustomer([text('Can I order 2 jars?', 0)], { now: NOW }).recent).toBe(false)
+  })
+
+  it('flags a customer who says their order arrived — even with no template on the thread (#vana1153, second number)', () => {
+    for (const body of ['received order tq', 'received with thanks', 'Received ghee, thank you.', 'I have received the parcel', 'we got the ghee today', 'Parcel reached, thanks']) {
+      const v = detectRecentCustomer([said(body, 0.1)], { now: NOW })
+      expect(v, body).toEqual({ recent: true, signal: 'customer_received', at: daysAgo(0.1) })
+    }
+  })
+
+  it('"received" only counts from the customer, and only about their order', () => {
+    expect(detectRecentCustomer([text('Once you have received your order, do share a review!', 0)], { now: NOW }).recent).toBe(false)
+    expect(detectRecentCustomer([{ ...said('Received your order details', 0), sender_type: 'bot' }], { now: NOW }).recent).toBe(false)
+    for (const body of ['Have you received my payment?', 'did you receive my address', 'I have not received the parcel yet']) {
+      expect(detectRecentCustomer([said(body, 0)], { now: NOW }).recent, body).toBe(false)
+    }
   })
 })

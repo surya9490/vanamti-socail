@@ -94,6 +94,24 @@ describe('evaluateThread — sales stage and recent customer rails', () => {
     }
   })
 
+  it('never re-engages a customer who said no — at any stage', () => {
+    for (const stage of ['catalog', 'address_ask', 'payment_link_sent'] as const) {
+      expect(evaluateThread({ ...quietWarmLead, salesStage: stage, customerDeclined: true }, opts)).toEqual({ eligible: false, reason: 'customer_declined' })
+    }
+  })
+
+  it('a bare "ok" the AI left unanswered keeps a sales lead eligible — they are the quiet party', () => {
+    const okLast = { senderType: 'customer', contentType: 'text', templateName: null, contentText: 'Ok 👍' }
+    expect(evaluateThread({ ...quietWarmLead, lastMessage: okLast }, opts).eligible).toBe(true)
+    // …but the other rails still apply to it.
+    expect(evaluateThread({ ...quietWarmLead, lastMessage: okLast, recentCustomer: true }, opts)).toEqual({ eligible: false, reason: 'recent_customer' })
+    expect(evaluateThread({ ...quietWarmLead, lastMessage: okLast, salesStage: null }, opts)).toEqual({ eligible: false, reason: 'no_sales_stage' })
+    // A real question is still waiting on us.
+    expect(
+      evaluateThread({ ...quietWarmLead, lastMessage: { ...okLast, contentText: 'ok, is COD available?' } }, opts),
+    ).toEqual({ eligible: false, reason: 'awaiting_our_reply' })
+  })
+
   it('still re-engages a recent customer who was explicitly mid-checkout', () => {
     for (const stage of ['address_ask', 'address_confirm', 'payment_link_sent'] as const) {
       expect(evaluateThread({ ...quietWarmLead, salesStage: stage, recentCustomer: true }, opts).eligible).toBe(true)
