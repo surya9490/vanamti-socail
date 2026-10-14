@@ -321,7 +321,7 @@ export async function GET(request: Request): Promise<Response> {
             .from('conversation_close_nudges')
             .select('message_id')
             .eq('conversation_id', conversationId),
-          fetchRecentCustomerVerdict(db, conversationId, now),
+          fetchRecentCustomerVerdict(db, conversationId, now, { assumeRecentOnError: true }),
         ])
         const session: SessionMessage[] = (
           (sessionRows ?? []) as {

@@ -14,10 +14,19 @@ export async function fetchRecentCustomerVerdict(
   db: SupabaseClient,
   conversationId: string,
   now: number,
+  opts: {
+    /**
+     * Follow-up crons pass true: when we can't tell whether they just
+     * ordered, skipping one nudge beats "still thinking it over?" to a
+     * buyer. The reply path keeps the default so a lookup failure never
+     * blocks an answer.
+     */
+    assumeRecentOnError?: boolean
+  } = {},
 ): Promise<RecentCustomerVerdict & { windowDays: number }> {
   const windowDays = recentCustomerWindowDays()
   const since = new Date(now - windowDays * 86_400_000).toISOString()
-  const notRecent = { recent: false as const, signal: null, at: null, windowDays }
+  const unknown = { recent: opts.assumeRecentOnError === true, signal: null, at: null, windowDays }
   try {
     const { data, error } = await db
       .from('messages')
@@ -27,16 +36,16 @@ export async function fetchRecentCustomerVerdict(
       .order('created_at', { ascending: false })
       .limit(200)
     if (error) {
-      // Unknown history → treat as not-recent so the reply still flows;
-      // the crons have their own rails. Never let this lookup take the
+      // Unknown history → not-recent by default so the reply still
+      // flows (see assumeRecentOnError). Never let this lookup take the
       // reply down with it.
       console.warn('[recent-customer] history query failed:', error.message)
-      return notRecent
+      return unknown
     }
     const verdict = detectRecentCustomer((data ?? []) as RecentCustomerMessage[], { now, windowDays })
     return { ...verdict, windowDays }
   } catch (err) {
     console.warn('[recent-customer] history lookup threw:', err instanceof Error ? err.message : err)
-    return notRecent
+    return unknown
   }
 }

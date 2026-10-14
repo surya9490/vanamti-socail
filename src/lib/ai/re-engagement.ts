@@ -30,10 +30,13 @@
 //     showed products (catalog) or moved toward checkout (address /
 //     payment). A support-only thread ("where is my order?" →
 //     "you're welcome") is never re-engaged.
-//   * a RECENT CUSTOMER (ordered within the last ~10 days, see
-//     recent-customer.ts) is re-engaged only when they were explicitly
-//     mid-checkout (address / payment stage). A catalog alone doesn't
-//     count for them — they didn't come to shop.
+//   * never a RECENT CUSTOMER (ordered within the last ~10 days, see
+//     recent-customer.ts) — not even one who reached the address /
+//     payment stage: that checkout is usually the order they just
+//     placed. (Live 2026-10-14, #vana1213: payment link 13:18, order
+//     confirmed 13:20, customer "Ok" — and the 3h check-in asked "Still
+//     thinking it over?" at 16:33.) A recent buyer hears from us when
+//     they write, not before.
 //
 // Plus a quiet-hours window (default 22:00–08:00 Asia/Kolkata): a
 // nudge at 1 am reads as spam and earns blocks.
@@ -50,11 +53,6 @@ const SALES_STAGE_RANK: Record<SalesStage, number> = {
   address_ask: 2,
   address_confirm: 3,
   payment_link_sent: 4,
-}
-
-/** True for stages that mean the customer is explicitly buying. */
-export function isCheckoutStage(stage: SalesStage | null): boolean {
-  return stage !== null && SALES_STAGE_RANK[stage] >= 2
 }
 
 export interface SessionMessage {
@@ -203,7 +201,7 @@ export function evaluateThread(
   if (!snap.salesStage) {
     return { eligible: false, reason: 'no_sales_stage' }
   }
-  if (snap.recentCustomer && !isCheckoutStage(snap.salesStage)) {
+  if (snap.recentCustomer) {
     return { eligible: false, reason: 'recent_customer' }
   }
   const hoursSince =

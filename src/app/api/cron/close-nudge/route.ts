@@ -176,19 +176,19 @@ export async function GET(request: Request): Promise<Response> {
       continue
     }
 
-    // A recent customer (ordered in the last ~10 days) who was shown
-    // the catalog is not "deciding" — they came for support and the
-    // catalog was incidental. No browse nudges for them; the explicit
-    // checkout stages (address / payment) still get theirs.
-    if (stage === 'catalog_sent') {
-      const recent = await fetchRecentCustomerVerdict(db, bot.conversation_id, now.getTime())
-      if (recent.recent) {
-        console.log(
-          `[close-nudge] conv=${bot.conversation_id} recent customer (${recent.signal}) — no catalog nudge`,
-        )
-        skipped += 1
-        continue
-      }
+    // A recent customer (ordered in the last ~10 days) gets no nudge at
+    // any stage — a "still there?" right after they paid reads as if
+    // we lost their order. If they want something, they'll write. A
+    // failed lookup counts as recent: skipping one nudge is cheap.
+    const recent = await fetchRecentCustomerVerdict(db, bot.conversation_id, now.getTime(), {
+      assumeRecentOnError: true,
+    })
+    if (recent.recent) {
+      console.log(
+        `[close-nudge] conv=${bot.conversation_id} recent customer (${recent.signal ?? 'lookup failed'}) — no nudge`,
+      )
+      skipped += 1
+      continue
     }
 
     // Conversation gate: AI still on, thread open, contact not opted out.

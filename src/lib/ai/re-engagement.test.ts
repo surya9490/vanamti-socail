@@ -112,9 +112,19 @@ describe('evaluateThread — sales stage and recent customer rails', () => {
     ).toEqual({ eligible: false, reason: 'awaiting_our_reply' })
   })
 
-  it('still re-engages a recent customer who was explicitly mid-checkout', () => {
+  it('never re-engages a recent customer — not even past the payment link (Manjula, #vana1213)', () => {
+    // Payment link → order confirmed → "Ok": the checkout stage is the
+    // order they just placed, not one they abandoned.
+    const okLast = { senderType: 'customer', contentType: 'text', templateName: null, contentText: 'Ok' }
     for (const stage of ['address_ask', 'address_confirm', 'payment_link_sent'] as const) {
-      expect(evaluateThread({ ...quietWarmLead, salesStage: stage, recentCustomer: true }, opts).eligible).toBe(true)
+      expect(evaluateThread({ ...quietWarmLead, salesStage: stage, recentCustomer: true }, opts)).toEqual({ eligible: false, reason: 'recent_customer' })
+      expect(evaluateThread({ ...quietWarmLead, lastMessage: okLast, salesStage: stage, recentCustomer: true }, opts)).toEqual({ eligible: false, reason: 'recent_customer' })
+    }
+  })
+
+  it('still re-engages a first-time buyer who stalled mid-checkout', () => {
+    for (const stage of ['address_ask', 'address_confirm', 'payment_link_sent'] as const) {
+      expect(evaluateThread({ ...quietWarmLead, salesStage: stage }, opts).eligible).toBe(true)
     }
   })
 })
