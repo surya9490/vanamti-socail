@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { groupCatalogSections } from './catalog-sections'
+import { groupByCollections, groupCatalogSections } from './catalog-sections'
 
-const product = (title: string, type: string | null, variantIds: Array<[string, number]>) => ({
-  shop_product_id: `p-${title}`,
+const product = (title: string, type: string | null, variantIds: Array<[string, number]>, id = `p-${title}`) => ({
+  shop_product_id: id,
   title,
   product_type: type,
   image_url: null,
@@ -68,5 +68,55 @@ describe('groupCatalogSections', () => {
     )
     expect(sections[0].title).toHaveLength(24)
     expect(sections[0].productRetailerIds).toEqual(['shopify_IN_o1'])
+  })
+})
+
+describe('groupByCollections', () => {
+  // Mirrors the live store: All (every product), Pure Natural Honey, Pure Desi Ghee.
+  const rows = [
+    product('A2 Cow Ghee', 'Ghee', [['g1-250', 599]], 'a2'),
+    product('Acacia Honey', 'Honey', [['h1-250', 399]], 'acacia'),
+    product('Forest Honey', 'Honey', [['h2-250', 549]], 'forest'),
+    product('Iyappa Ghee', 'Ghee', [['g2-250', 349]], 'iyappa'),
+    product('Wild Forest Honey', 'Honey', [['h3-250', 289]], 'wild'),
+  ]
+  const all = { id: '1', title: 'All', productIds: ['iyappa', 'a2', 'forest', 'acacia', 'wild'] }
+  const honey = { id: '2', title: 'Pure Natural Honey', productIds: ['forest', 'acacia', 'wild'] }
+  const ghee = { id: '3', title: 'Pure Desi Ghee', productIds: ['iyappa', 'a2'] }
+
+  it('one section per flagged collection, biggest first, in collection order; "All" skipped', () => {
+    const c = groupByCollections(rows, [all, ghee, honey])!
+    expect(c.sections).toEqual([
+      { title: 'Pure Natural Honey', productRetailerIds: ['h2-250', 'h1-250', 'h3-250'] },
+      { title: 'Pure Desi Ghee', productRetailerIds: ['g2-250', 'g1-250'] },
+    ])
+    expect(Object.keys(c.meta)).toHaveLength(5)
+  })
+
+  it('a product in two collections appears once, under the first', () => {
+    const bestSellers = { id: '4', title: 'Best Sellers', productIds: ['forest', 'iyappa'] }
+    const c = groupByCollections(rows, [honey, ghee, bestSellers])!
+    expect(c.retailerIds).toHaveLength(5)
+    expect(new Set(c.retailerIds).size).toBe(5)
+    // Best Sellers ties Pure Desi Ghee on size and sorts first, so it keeps Iyappa.
+    expect(c.sections).toEqual([
+      { title: 'Pure Natural Honey', productRetailerIds: ['h2-250', 'h1-250', 'h3-250'] },
+      { title: 'Best Sellers', productRetailerIds: ['g2-250'] },
+      { title: 'Pure Desi Ghee', productRetailerIds: ['g1-250'] },
+    ])
+  })
+
+  it('products in no flagged collection go under "More products"; unknown or inactive ids are ignored', () => {
+    const c = groupByCollections(rows, [{ ...honey, productIds: [...honey.productIds, 'draft-product'] }])!
+    expect(c.sections).toEqual([
+      { title: 'Pure Natural Honey', productRetailerIds: ['h2-250', 'h1-250', 'h3-250'] },
+      { title: 'More products', productRetailerIds: ['g1-250', 'g2-250'] },
+    ])
+  })
+
+  it('returns null when no collection gives a usable section, so the caller falls back to type', () => {
+    expect(groupByCollections(rows, [all])).toBeNull()
+    expect(groupByCollections(rows, [{ id: '9', title: 'Oils', productIds: [] }])).toBeNull()
+    expect(groupByCollections(rows, [])).toBeNull()
   })
 })

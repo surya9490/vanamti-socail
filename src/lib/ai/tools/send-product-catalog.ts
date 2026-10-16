@@ -14,7 +14,7 @@ import { buildProductCatalog } from '@/lib/products/catalog-sections'
 // you sell", a category ask ("do you have honey"), "what else".
 // The catalog is the ONLY way the AI shows more than one product;
 // it never types a product list. Sends every active product,
-// grouped into one section per category (see catalog-sections).
+// one section per flagged Shopify collection (see catalog-sections).
 //
 // Setup required on the operator side:
 //   * Meta Business Verified ✓ (Vanamati already is)
@@ -43,7 +43,7 @@ export const sendProductCatalogTool: AiTool = {
   name: 'send_product_catalog',
   label: 'Send product catalogue (WhatsApp catalog)',
   description:
-    'Send the customer a native WhatsApp multi-product message: EVERY active product, grouped by category (Honey, Ghee, …), with images, prices, and a "View" button per product. ' +
+    'Send the customer a native WhatsApp multi-product message: EVERY active product, grouped by collection (e.g. Pure Natural Honey, Pure Desi Ghee), with images, prices, and a "View" button per product. ' +
     'This is the ONLY way to show the customer more than one product — never type a product list or price list instead. ' +
     'Use it whenever the customer wants to see or choose products, at any point in the conversation: greetings / first message, "what do you sell", "products", "price list", "show me", a category ask ("do you have honey", "ghee?", "which honeys"), "what else do you have", recommendations. ' +
     'Do NOT use it when the customer named ONE specific product (answer that product with product_lookup), during checkout (address / payment), or in an order-support conversation. ' +
@@ -107,7 +107,7 @@ export const sendProductCatalogTool: AiTool = {
         previewProducts,
       })
       const categories = sections.map((s) => s.title).join(', ')
-      return `Product catalogue sent to the customer with ${productRetailerIds.length} products in ${sections.length} categories (${categories}). Do NOT list the same products again in your reply — the catalog IS the reply. A short acknowledgement is enough.`
+      return `Product catalogue sent to the customer with ${productRetailerIds.length} products in ${sections.length} collections (${categories}). Do NOT list the same products again in your reply — the catalog IS the reply. A short acknowledgement is enough.`
     } catch (err) {
       console.warn(
         '[send_product_catalog] Meta send failed:',
