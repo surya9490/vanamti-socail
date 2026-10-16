@@ -441,8 +441,11 @@ export async function GET(request: Request): Promise<Response> {
             if (!catalogId) {
               throw new Error('WHATSAPP_CATALOG_ID not set — catalog stage cannot fire')
             }
-            const { retailerIds: productRetailerIds, meta: previewProducts } =
-              await buildProductCatalog(db, accountId)
+            const {
+              retailerIds: productRetailerIds,
+              sections,
+              meta: previewProducts,
+            } = await buildProductCatalog(db, accountId)
             if (productRetailerIds.length === 0) {
               throw new Error('no active products with variants to send')
             }
@@ -456,9 +459,7 @@ export async function GET(request: Request): Promise<Response> {
               contactId: contact.id,
               catalogId,
               bodyText,
-              sections: [
-                { title: 'Featured', productRetailerIds },
-              ],
+              sections,
               previewProducts,
             })
           } else if (stage.template_type === 'freeform_text') {

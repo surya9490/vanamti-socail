@@ -650,6 +650,8 @@ export async function engineSendProductList(
   }
 
   const accessToken = decrypt(config.access_token)
+  // Meta requires a header on multi-product messages.
+  const headerText = args.headerText?.trim() || 'Our products'
 
   const attempt = async (phone: string): Promise<string> => {
     const r = await sendProductListMessage({
@@ -659,7 +661,7 @@ export async function engineSendProductList(
       catalogId: args.catalogId,
       bodyText: args.bodyText,
       sections: args.sections,
-      headerText: args.headerText,
+      headerText,
       footerText: args.footerText,
     })
     return r.messageId
@@ -708,7 +710,7 @@ export async function engineSendProductList(
   const interactivePayload = {
     kind: 'product_list' as const,
     body: args.bodyText,
-    header: args.headerText,
+    header: headerText,
     footer: args.footerText,
     catalog_id: args.catalogId,
     sections: previewSections,

@@ -9,11 +9,12 @@ import { buildProductCatalog } from '@/lib/products/catalog-sections'
 // cards inside WhatsApp — much richer than a text list, and FREE
 // within the customer's 24hr session window.
 //
-// When to call (prompt tells the model):
-//   * Customer's opener is generic ("hi", "hello", "what do you
-//     sell", "show me products") AND
-//   * We're inside the 24hr session window (the customer just
-//     messaged us — this is always true at auto-reply time).
+// When to call (prompt tells the model): any time the customer
+// wants to see or choose between products — the opener, "what do
+// you sell", a category ask ("do you have honey"), "what else".
+// The catalog is the ONLY way the AI shows more than one product;
+// it never types a product list. Sends every active product,
+// grouped into one section per category (see catalog-sections).
 //
 // Setup required on the operator side:
 //   * Meta Business Verified ✓ (Vanamati already is)
@@ -21,21 +22,18 @@ import { buildProductCatalog } from '@/lib/products/catalog-sections'
 //     Manager, ID set as env WHATSAPP_CATALOG_ID
 //   * Products synced to the catalog (via Meta's Shopify sync app
 //     OR manually). The product_retailer_id per catalog item
-//     needs to match the shop_product_id we pass — for Vanamati's
-//     Shopify → Meta sync, retailer_id defaults to the Shopify
-//     product id (numeric).
+//     needs to match the variant id we pass — for Vanamati's
+//     Shopify → Meta sync, retailer_id is the Shopify variant id.
 //
-// If env is missing OR the catalog isn't set up, the tool returns
-// UNAVAILABLE and the model falls back to the text-list greeting.
+// If env is missing OR the send fails, the tool returns UNAVAILABLE
+// and the model asks what the customer wants — still no text list.
 // ============================================================
 
 const UNAVAILABLE =
-  'The visual product catalogue is not configured yet. Fall back to listing products as text using product_lookup.'
+  'The product catalogue could not be sent right now. Do NOT list products as text instead. In one short line, ask what they are looking for (e.g. honey or ghee, which size) and then answer about that one product using product_lookup.'
 
 const MISSING_PRODUCTS =
-  'No active products in the cache to send. Ask the customer what they are looking for as a text reply.'
-
-const MAX_PRODUCTS = 8 // Meta cap is 30; keep the message short for WhatsApp.
+  'No active products in the cache to send. Do NOT list products as text. Ask the customer what they are looking for in one short line.'
 
 function catalogConfigured(): boolean {
   return Boolean(process.env.WHATSAPP_CATALOG_ID)
@@ -45,9 +43,10 @@ export const sendProductCatalogTool: AiTool = {
   name: 'send_product_catalog',
   label: 'Send product catalogue (WhatsApp catalog)',
   description:
-    'Send the customer a native WhatsApp multi-product message with images, prices, and a "View" button per product. ' +
-    'Use this ONLY on a generic opener (hi / hello / namaste / "show me products" / "what do you sell") when a visual catalog is more helpful than text. ' +
-    'Do NOT use on follow-up messages, on specific product questions ("do you have honey"), or during a close flow — those need a targeted text response. ' +
+    'Send the customer a native WhatsApp multi-product message: EVERY active product, grouped by category (Honey, Ghee, …), with images, prices, and a "View" button per product. ' +
+    'This is the ONLY way to show the customer more than one product — never type a product list or price list instead. ' +
+    'Use it whenever the customer wants to see or choose products, at any point in the conversation: greetings / first message, "what do you sell", "products", "price list", "show me", a category ask ("do you have honey", "ghee?", "which honeys"), "what else do you have", recommendations. ' +
+    'Do NOT use it when the customer named ONE specific product (answer that product with product_lookup), during checkout (address / payment), or in an order-support conversation. ' +
     'After calling this tool, DO NOT send a text list of the same products in your reply — the catalog IS the reply. Just add a short warm line ("Namaste! Tap any product to see details 🌿"). ' +
     'Returns a status string; on success the message is already sent to the customer.',
   parameters: {
@@ -82,8 +81,14 @@ export const sendProductCatalogTool: AiTool = {
     // when running a stage of type='catalog'. Returns both the
     // retailer_ids (what Meta needs) AND per-product metadata
     // (title/price/image) for the inbox preview payload.
-    const { retailerIds: productRetailerIds, meta: previewProducts } =
-      await buildProductCatalog(ctx.db, ctx.accountId, MAX_PRODUCTS)
+    // No tighter cap than Meta's 30: the bubble is the same size
+    // either way (cards open in a sheet), and a lower cap silently
+    // dropped whatever sorted last by title.
+    const {
+      retailerIds: productRetailerIds,
+      sections,
+      meta: previewProducts,
+    } = await buildProductCatalog(ctx.db, ctx.accountId)
     if (productRetailerIds.length === 0) return MISSING_PRODUCTS
 
     console.log(
@@ -98,15 +103,11 @@ export const sendProductCatalogTool: AiTool = {
         catalogId: process.env.WHATSAPP_CATALOG_ID!,
         bodyText,
         headerText,
-        sections: [
-          {
-            title: 'Featured',
-            productRetailerIds,
-          },
-        ],
+        sections,
         previewProducts,
       })
-      return `Product catalogue sent to the customer with ${productRetailerIds.length} products. Do NOT list the same products again in your reply — the catalog IS the reply. A short acknowledgement is enough.`
+      const categories = sections.map((s) => s.title).join(', ')
+      return `Product catalogue sent to the customer with ${productRetailerIds.length} products in ${sections.length} categories (${categories}). Do NOT list the same products again in your reply — the catalog IS the reply. A short acknowledgement is enough.`
     } catch (err) {
       console.warn(
         '[send_product_catalog] Meta send failed:',

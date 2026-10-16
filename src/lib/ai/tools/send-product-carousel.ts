@@ -42,11 +42,11 @@ import { buildProductCarouselCards } from '@/lib/products/carousel-cards'
 //      WHATSAPP_CAROUSEL_TEMPLATE_LANG (default 'en')
 //
 // If env vars are missing, the tool returns UNAVAILABLE and the
-// model falls back to a text list.
+// model falls back to send_product_catalog (never a text list).
 // ============================================================
 
 const UNAVAILABLE =
-  'The carousel template is not configured. Fall back to send_product_catalog (in-session) or product_lookup (text list).'
+  'The carousel template is not configured. Fall back to send_product_catalog (in-session). Do NOT list products as text.'
 
 const MISSING_PRODUCTS =
   'No active products with images available. Ask the customer what they are looking for as a text reply.'

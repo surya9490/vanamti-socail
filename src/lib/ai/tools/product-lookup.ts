@@ -126,8 +126,9 @@ export const productLookupTool: AiTool = {
   name: 'product_lookup',
   label: 'Product catalogue lookup',
   description:
-    'Look up products from the live store catalogue. Call this whenever the customer asks about products, prices, or "what do you sell". ' +
-    'Pass a search term if the customer mentioned one (e.g. "honey", "gift box"); omit the query to get a small selection of active products for a generic greeting. ' +
+    'Look up products from the live store catalogue — exact prices, sizes and variant ids for a SPECIFIC product the customer named, a cross-sell item, or create_draft_order. ' +
+    'For browsing ("what do you sell", "show me", a category like "honey") use send_product_catalog instead — never paste this tool\'s output to the customer as a list of products. ' +
+    'Pass a search term (e.g. "forest honey"); omitting it returns a small selection of active products. ' +
     'Returns up to 5 products with prices and (for multi-variant products) each variant with its variant_id. ' +
     'Quote titles + prices verbatim rather than inventing numbers. Never show variant_id values to the customer — they are for calling create_draft_order.',
   parameters: {
