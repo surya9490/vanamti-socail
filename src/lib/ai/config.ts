@@ -5,6 +5,7 @@ import type { AiConfig, AiProvider } from './types'
 interface AiConfigRow {
   provider: AiProvider
   model: string
+  base_url: string | null
   api_key: string
   system_prompt: string | null
   is_active: boolean
@@ -17,7 +18,7 @@ interface AiConfigRow {
 }
 
 const CONFIG_COLUMNS =
-  'provider, model, api_key, system_prompt, is_active, auto_reply_enabled, auto_reply_max_per_conversation, handoff_agent_id, embeddings_api_key, enabled_tools, default_language'
+  'provider, model, base_url, api_key, system_prompt, is_active, auto_reply_enabled, auto_reply_max_per_conversation, handoff_agent_id, embeddings_api_key, enabled_tools, default_language'
 
 /**
  * Load and decrypt the account's AI config for *use* (draft or
@@ -74,6 +75,7 @@ export async function loadAiConfig(
   return {
     provider: row.provider,
     model: row.model,
+    baseUrl: row.base_url,
     apiKey: decrypt(row.api_key),
     systemPrompt: row.system_prompt,
     isActive: row.is_active,

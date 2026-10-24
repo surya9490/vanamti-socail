@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
 import { usePresence } from "@/hooks/use-presence";
@@ -52,9 +52,28 @@ import { deleteAccountMedia } from "@/lib/storage/upload-media";
 import { TemplatePicker } from "./template-picker";
 import { AiThreadBanner } from "./ai-thread-banner";
 import { buildReplyPreview } from "./reply-quote";
-import { renderTemplateBody } from "@/lib/whatsapp/template-body";
+import {
+  renderTemplateBody,
+  templateHeaderMediaUrl,
+} from "@/lib/whatsapp/template-body";
+import {
+  matchMessageTemplate,
+  templateNamesInMessages,
+} from "@/lib/whatsapp/template-message-view";
 import { contactHandle } from "@/lib/whatsapp/wa-identity";
+import {
+  businessReactionOn,
+  withBusinessReaction,
+} from "@/lib/inbox/business-reaction";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import {
+  confirmedSendUpdate,
+  isTempMessage,
+  newTempMessageId,
+} from "@/lib/inbox/optimistic-messages";
+
+const MESSAGE_PAGE_SIZE = 200;
 
 interface ReplyDraft {
   id: string;
@@ -66,7 +85,8 @@ interface MessageThreadProps {
   conversation: Conversation | null;
   contact: Contact | null;
   messages: Message[];
-  onMessagesLoaded: (messages: Message[]) => void;
+  onMessagesLoaded: (messages: Message[], conversationId: string) => void;
+  onOlderMessagesLoaded?: (messages: Message[]) => void;
   onNewMessage: (message: Message) => void;
   onUpdateMessage: (id: string, updates: Partial<Message>) => void;
   onStatusChange: (conversationId: string, status: ConversationStatus) => void;
@@ -155,6 +175,7 @@ export function MessageThread({
   contact,
   messages,
   onMessagesLoaded,
+  onOlderMessagesLoaded,
   onNewMessage,
   onUpdateMessage,
   onStatusChange,
@@ -173,9 +194,44 @@ export function MessageThread({
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const [olderPages, setOlderPages] = useState<{
+    conversationId: string;
+    hasOlder: boolean;
+  } | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
+  const [sentTemplates, setSentTemplates] = useState<MessageTemplate[]>([]);
+  const sentTemplateNames = useMemo(
+    () => templateNamesInMessages(messages).join("\n"),
+    [messages],
+  );
+  useEffect(() => {
+    if (!sentTemplateNames) return;
+
+    const supabase = createClient();
+    let cancelled = false;
+
+    (async () => {
+      const { data, error } = await supabase
+        .from("message_templates")
+        .select("*")
+        .in("name", sentTemplateNames.split("\n"));
+
+      if (cancelled) return;
+      if (error) {
+        console.error("Failed to fetch sent templates:", error);
+        return;
+      }
+      setSentTemplates((data as MessageTemplate[]) ?? []);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sentTemplateNames]);
   // Purely visual spin state for the manual-refresh button. The actual
   // refetch is fire-and-forget through `onRefresh` (which bumps the
   // parent's resyncToken); the 700ms spin is just feedback so the click
@@ -273,6 +329,8 @@ export function MessageThread({
 
   const conversationId = conversation?.id;
   const hasUnread = (conversation?.unread_count ?? 0) > 0;
+  const hasOlderMessages =
+    !!olderPages && olderPages.conversationId === conversationId && olderPages.hasOlder;
 
   const mediaMessageId =
     openMedia && openMedia.conversationId === conversationId
@@ -304,14 +362,21 @@ export function MessageThread({
         .from("messages")
         .select("*")
         .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(MESSAGE_PAGE_SIZE);
 
       if (cancelled) return;
 
       if (error) {
         console.error("Failed to fetch messages:", error);
       } else {
-        onMessagesLoadedRef.current(data ?? []);
+        const newestPage = ((data ?? []) as Message[]).slice().reverse();
+        setOlderPages({
+          conversationId,
+          hasOlder: newestPage.length === MESSAGE_PAGE_SIZE,
+        });
+        onMessagesLoadedRef.current(newestPage, conversationId);
       }
 
       if (!cancelled) setLoading(false);
@@ -325,6 +390,43 @@ export function MessageThread({
     // realtime is best-effort and any message events sent while the WS
     // was disconnected or throttled are otherwise lost.
   }, [conversationId, resyncToken]);
+
+  const loadOlderMessages = useCallback(async () => {
+    const oldest = messages.find((m) => !isTempMessage(m));
+    if (!conversationId || !oldest || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const { data, error } = await createClient()
+        .from("messages")
+        .select("*")
+        .eq("conversation_id", conversationId)
+        .lte("created_at", oldest.created_at)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(MESSAGE_PAGE_SIZE);
+      if (error) {
+        console.error("Failed to fetch older messages:", error);
+        toast.error(t("loadOlderFailed"));
+        return;
+      }
+      const olderPage = ((data ?? []) as Message[]).slice().reverse();
+      setOlderPages({
+        conversationId,
+        hasOlder: olderPage.length === MESSAGE_PAGE_SIZE,
+      });
+      const knownIds = new Set(messages.map((m) => m.id));
+      const el = scrollRef.current;
+      if (el && olderPage.some((m) => !knownIds.has(m.id))) {
+        scrollAnchorRef.current = {
+          scrollHeight: el.scrollHeight,
+          scrollTop: el.scrollTop,
+        };
+      }
+      onOlderMessagesLoaded?.(olderPage);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [conversationId, loadingOlder, messages, onOlderMessagesLoaded, t]);
 
   // Reactions fetch — pulls the current state from the DB. Kept separate
   // from the channel subscription below so a `resyncToken` bump just
@@ -457,18 +559,23 @@ export function MessageThread({
   }, [conversationId, hasUnread]);
 
   // Auto-scroll to bottom on new messages
-  useEffect(() => {
-    if (scrollRef.current) {
-      const el = scrollRef.current;
-      el.scrollTop = el.scrollHeight;
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const anchor = scrollAnchorRef.current;
+    scrollAnchorRef.current = null;
+    if (anchor) {
+      el.scrollTop = el.scrollHeight - anchor.scrollHeight + anchor.scrollTop;
+      return;
     }
+    el.scrollTop = el.scrollHeight;
   }, [messages]);
 
   const handleSend = useCallback(
     async (text: string, replyToId?: string) => {
       if (!conversation) return;
 
-      const tempId = `temp-${Date.now()}`;
+      const tempId = newTempMessageId();
 
       // Optimistic update — shows the message immediately with "sending" status
       const optimisticMsg: Message = {
@@ -510,10 +617,10 @@ export function MessageThread({
         // Success — the realtime INSERT event will replace the temp bubble
         // with the real DB row. If realtime hasn't arrived yet, at least
         // flip status to 'sent' so the UI stops showing "sending".
-        onUpdateMessage(tempId, { status: "sent" });
+        onUpdateMessage(tempId, confirmedSendUpdate(payload));
       } catch (err) {
         console.error("Failed to send message:", err);
-        const reason = err instanceof Error ? err.message : "network error";
+        const reason = err instanceof Error ? err.message : t("networkError");
         toast.error(t("sendFailed", { reason }));
         onUpdateMessage(tempId, { status: "failed" });
       }
@@ -530,10 +637,10 @@ export function MessageThread({
       // kinds use the caption as-is. Audio carries no caption.
       const contentText =
         payload.kind === "document"
-          ? payload.caption || payload.filename || "Document"
+          ? payload.caption || payload.filename || t("documentFallback")
           : payload.caption;
 
-      const tempId = `temp-${Date.now()}`;
+      const tempId = newTempMessageId();
       const optimisticMsg: Message = {
         id: tempId,
         conversation_id: conversation.id,
@@ -575,10 +682,10 @@ export function MessageThread({
           return;
         }
 
-        onUpdateMessage(tempId, { status: "sent" });
+        onUpdateMessage(tempId, confirmedSendUpdate(data));
       } catch (err) {
         console.error("Failed to send media:", err);
-        const reason = err instanceof Error ? err.message : "network error";
+        const reason = err instanceof Error ? err.message : t("networkError");
         toast.error(t("sendFailed", { reason }));
         onUpdateMessage(tempId, { status: "failed" });
         void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
@@ -591,7 +698,7 @@ export function MessageThread({
     async (payload: InteractiveMessagePayload, replyToId?: string) => {
       if (!conversation) return;
 
-      const tempId = `temp-${Date.now()}`;
+      const tempId = newTempMessageId();
       // Optimistic bubble — renders the buttons/list immediately via the
       // interactive_payload, same as the persisted row will.
       const optimisticMsg: Message = {
@@ -629,10 +736,10 @@ export function MessageThread({
           return;
         }
 
-        onUpdateMessage(tempId, { status: "sent" });
+        onUpdateMessage(tempId, confirmedSendUpdate(data));
       } catch (err) {
         console.error("Failed to send interactive message:", err);
-        const reason = err instanceof Error ? err.message : "network error";
+        const reason = err instanceof Error ? err.message : t("networkError");
         toast.error(t("sendFailed", { reason }));
         onUpdateMessage(tempId, { status: "failed" });
       }
@@ -671,7 +778,7 @@ export function MessageThread({
       if (!conversation) return;
 
       const renderedBody = renderTemplateBody(template.body_text, values.body);
-      const tempId = `temp-${Date.now()}`;
+      const tempId = newTempMessageId();
 
       const optimisticMsg: Message = {
         id: tempId,
@@ -679,6 +786,7 @@ export function MessageThread({
         sender_type: "agent",
         content_type: "template",
         content_text: renderedBody,
+        media_url: templateHeaderMediaUrl(template) ?? undefined,
         template_name: template.name,
         status: "sending",
         created_at: new Date().toISOString(),
@@ -718,10 +826,10 @@ export function MessageThread({
           return;
         }
 
-        onUpdateMessage(tempId, { status: "sent" });
+        onUpdateMessage(tempId, confirmedSendUpdate(payload));
       } catch (err) {
         console.error("Failed to send template:", err);
-        const reason = err instanceof Error ? err.message : "network error";
+        const reason = err instanceof Error ? err.message : t("networkError");
         toast.error(t("sendTemplateFailed", { reason }));
         onUpdateMessage(tempId, { status: "failed" });
       }
@@ -761,9 +869,9 @@ export function MessageThread({
     (m: Message): string => {
       const isAgentMsg =
         m.sender_type === "agent" || m.sender_type === "bot";
-      return isAgentMsg ? "You" : contactDisplayName;
+      return isAgentMsg ? t("you") : contactDisplayName;
     },
-    [contactDisplayName],
+    [contactDisplayName, t],
   );
 
   const handleStartReply = useCallback(
@@ -800,26 +908,13 @@ export function MessageThread({
       // stale closure. Snapshot stored for rollback on POST failure.
       setReactions((prev) => {
         snapshot = prev;
-        const own = prev.find(
-          (r) =>
-            r.message_id === messageId &&
-            r.actor_type === "agent" &&
-            r.actor_id === userId,
-        );
-        if (emoji === "") return own ? prev.filter((r) => r !== own) : prev;
-        if (own) return prev.map((r) => (r === own ? { ...own, emoji } : r));
-        return [
-          ...prev,
-          {
-            id: `temp-${Date.now()}`,
-            message_id: messageId,
-            conversation_id: convId,
-            actor_type: "agent",
-            actor_id: userId,
-            emoji,
-            created_at: new Date().toISOString(),
-          },
-        ];
+        return withBusinessReaction(prev, {
+          messageId,
+          conversationId: convId,
+          userId,
+          emoji,
+          now: new Date(),
+        });
       });
 
       try {
@@ -833,7 +928,7 @@ export function MessageThread({
           throw new Error(payload?.error || `HTTP ${res.status}`);
         }
       } catch (err) {
-        const reason = err instanceof Error ? err.message : "network error";
+        const reason = err instanceof Error ? err.message : t("networkError");
         toast.error(t("reactionFailed", { reason }));
         setReactions(snapshot);
       }
@@ -1098,6 +1193,18 @@ export function MessageThread({
           </div>
         ) : (
           <div className="space-y-4">
+            {hasOlderMessages && onOlderMessagesLoaded && (
+              <div className="flex justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void loadOlderMessages()}
+                  disabled={loadingOlder}
+                >
+                  {loadingOlder ? t("loadingOlder") : t("loadOlder")}
+                </Button>
+              </div>
+            )}
             {messageGroups.map((group) => (
               <div key={group.date}>
                 {/* Date separator */}
@@ -1122,15 +1229,10 @@ export function MessageThread({
                         }
                       : null;
                     const msgReactions = reactionsByMessageId.get(msg.id);
-                    // Toggle is computed at the call site — `msgReactions`
-                    // and `user?.id` are already in scope, no extra hook.
+                    // Toggle is computed at the call site — no extra hook.
                     const handlePillToggle = (emoji: string) => {
-                      const own = msgReactions?.find(
-                        (r) =>
-                          r.actor_type === "agent" &&
-                          r.actor_id === user?.id,
-                      );
-                      const next = own?.emoji === emoji ? "" : emoji;
+                      const current = businessReactionOn(msgReactions, msg.id);
+                      const next = current?.emoji === emoji ? "" : emoji;
                       void postReaction(msg.id, next);
                     };
                     return (
@@ -1144,9 +1246,13 @@ export function MessageThread({
                       >
                         <MessageBubble
                           message={msg}
+                          template={
+                            msg.content_type === "template"
+                              ? matchMessageTemplate(msg, sentTemplates)
+                              : null
+                          }
                           reply={reply}
                           reactions={msgReactions}
-                          currentUserId={user?.id}
                           onToggleReaction={handlePillToggle}
                           onOpenMedia={handleMediaChange}
                         />

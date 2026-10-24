@@ -23,13 +23,13 @@ describe('pickModelForAutoReply — provider gating', () => {
     expect(picked).toBe('gpt-5.4-mini')
   })
 
-  it('always returns config.model for gemini', () => {
+  it('always returns config.model for openai_compatible', () => {
     const picked = pickModelForAutoReply({
-      config: cfg({ provider: 'gemini', model: 'gemini-2.5-flash' }),
+      config: cfg({ provider: 'openai_compatible', model: 'llama-3.3-70b' }),
       latestUserMessage: 'hello',
       hasCreateOrderTool: false,
     })
-    expect(picked).toBe('gemini-2.5-flash')
+    expect(picked).toBe('llama-3.3-70b')
   })
 })
 

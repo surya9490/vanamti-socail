@@ -9,6 +9,9 @@ import {
   toNetworkError,
   type ProviderArgs,
 } from './shared'
+import { getT } from '@/lib/i18n/translate'
+
+const t = getT('LibErrors')
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
 const ANTHROPIC_VERSION = '2023-06-01'
@@ -249,7 +252,7 @@ export async function generateAnthropic(args: ProviderArgs): Promise<ProviderRes
   )
   const text = extractText(data)
   if (!text) {
-    throw new AiError('Anthropic returned an empty response.', {
+    throw new AiError(t('ai.emptyResponse', { provider: 'Anthropic' }), {
       code: 'empty_response',
     })
   }
@@ -262,9 +265,6 @@ export async function generateAnthropic(args: ProviderArgs): Promise<ProviderRes
  * execute each requested tool server-side, feed the results back as
  * `tool_result` blocks, and ask again; stop when the model returns text
  * (or the round cap is hit). Token usage is summed across every round.
- *
- * Mirrors `generateGeminiWithTools` so the two adapters stay
- * behaviourally consistent for `generateReply` to dispatch to.
  */
 export async function generateAnthropicWithTools(
   args: ProviderArgs & { tools: AiTool[]; toolContext: ToolContext },

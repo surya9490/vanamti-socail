@@ -3,14 +3,14 @@
 //
 // One small provider-agnostic surface so the inbox draft route and the
 // inbound auto-reply bot both talk to `generateReply` without caring
-// whether the account is on OpenAI, Anthropic, or Gemini.
+// whether the account is on OpenAI, Anthropic, or an OpenAI-compatible API.
 // ============================================================
 
-export type AiProvider = 'openai' | 'anthropic' | 'gemini'
+export type AiProvider = 'openai' | 'anthropic' | 'openai_compatible'
 
 /** Every provider the assistant supports. Single source of truth for the
  *  config/test route validators and the settings UI. */
-export const AI_PROVIDERS = ['openai', 'anthropic', 'gemini'] as const
+export const AI_PROVIDERS = ['openai', 'anthropic', 'openai_compatible'] as const
 
 /** Runtime guard for untrusted `provider` values off the request body. */
 export function isAiProvider(v: unknown): v is AiProvider {
@@ -25,6 +25,8 @@ export function isAiProvider(v: unknown): v is AiProvider {
 export interface AiConfig {
   provider: AiProvider
   model: string
+  /** Base URL for OpenAI-compatible providers; null for native providers. */
+  baseUrl: string | null
   apiKey: string
   systemPrompt: string | null
   isActive: boolean

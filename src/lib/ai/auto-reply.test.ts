@@ -126,6 +126,9 @@ vi.mock('./admin-client', () => ({
         ...builder,
         update: (payload: Record<string, unknown>) => {
           h.state.updatePayload = payload
+          // Persist conversation writes so a later re-read (the
+          // pre-send takeover check) sees them, as the real DB would.
+          if (!isContacts && h.state.conv) Object.assign(h.state.conv, payload)
           return { eq: () => Promise.resolve({ error: null }) }
         },
       }
@@ -151,6 +154,7 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
   return {
     provider: 'openai',
     model: 'gpt-test',
+    baseUrl: null,
     apiKey: 'sk-test',
     systemPrompt: null,
     isActive: true,
@@ -238,6 +242,25 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     }
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).toHaveBeenCalled()
+  })
+
+  it('does not send when an agent takes over while the reply is generating', async () => {
+    h.generateReply.mockImplementation(async () => {
+      h.state.conv = { ...h.state.conv, assigned_agent_id: 'agent-9' }
+      return { text: 'Hello!', handoff: false }
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('does not send when the bot is paused while the reply is generating', async () => {
+    h.generateReply.mockImplementation(async () => {
+      h.state.conv = { ...h.state.conv, ai_autoreply_disabled: true }
+      return { text: 'Hello!', handoff: false }
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
   it('skips when AI is off / not configured', async () => {

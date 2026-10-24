@@ -7,8 +7,8 @@ import {
 } from './types'
 import { HANDOFF_SENTINEL, aiRequestTimeoutMs } from './defaults'
 import { generateOpenAi } from './providers/openai'
+import { generateOpenAiCompatible } from './providers/openai-compatible'
 import { generateAnthropic, generateAnthropicWithTools } from './providers/anthropic'
-import { generateGemini, generateGeminiWithTools } from './providers/gemini'
 import type { AiTool, ToolContext } from './tools/registry'
 
 export interface GenerateArgs {
@@ -18,7 +18,7 @@ export interface GenerateArgs {
   /** Recent conversation turns, oldest first. */
   messages: ChatMessage[]
   /** Function-calling tools to offer the model. Currently honoured by the
-   *  Gemini provider only; ignored for others (they answer text-only). */
+   *  Anthropic provider only; ignored for others (they answer text-only). */
   tools?: AiTool[]
   /** Per-conversation context passed to a tool's `run`. Required when
    *  `tools` is non-empty. */
@@ -39,24 +39,19 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
     systemPrompt,
     messages,
     timeoutMs,
+    baseUrl: config.baseUrl,
   }
 
   let result: { text: string; usage: AiUsage | null }
-  // Tool (function) calling is supported by Gemini and Anthropic. When
-  // tools are enabled and the provider has a tool-loop adapter, run it;
-  // OpenAI (no adapter yet) falls through to a plain text generation
-  // that ignores any tools passed. Adding OpenAI's function calling is a
-  // future PR — the code path is deliberately identical so slotting in
-  // `generateOpenAiWithTools` is a one-line change here.
+  // Tool (function) calling is supported by Anthropic. When tools are
+  // enabled and the provider has a tool-loop adapter, run it; OpenAI and
+  // OpenAI-compatible APIs (no adapter yet) fall through to a plain text
+  // generation that ignores any tools passed. Adding OpenAI's function
+  // calling is a future PR — the code path is deliberately identical so
+  // slotting in `generateOpenAiWithTools` is a one-line change here.
   const hasTools =
     args.tools !== undefined && args.tools.length > 0 && args.toolContext !== undefined
-  if (hasTools && config.provider === 'gemini') {
-    result = await generateGeminiWithTools({
-      ...providerArgs,
-      tools: args.tools!,
-      toolContext: args.toolContext!,
-    })
-  } else if (hasTools && config.provider === 'anthropic') {
+  if (hasTools && config.provider === 'anthropic') {
     result = await generateAnthropicWithTools({
       ...providerArgs,
       tools: args.tools!,
@@ -67,11 +62,11 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
       case 'openai':
         result = await generateOpenAi(providerArgs)
         break
+      case 'openai_compatible':
+        result = await generateOpenAiCompatible(providerArgs)
+        break
       case 'anthropic':
         result = await generateAnthropic(providerArgs)
-        break
-      case 'gemini':
-        result = await generateGemini(providerArgs)
         break
       default:
         throw new AiError(`Unsupported AI provider: ${config.provider}`, {

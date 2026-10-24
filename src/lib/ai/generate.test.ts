@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { generateReply, parseGeneration } from './generate'
 import { AiError, type AiConfig } from './types'
+import { MAX_OUTPUT_TOKENS } from './defaults'
 
 function config(overrides: Partial<AiConfig> = {}): AiConfig {
   return {
     provider: 'openai',
     model: 'gpt-test',
     apiKey: 'sk-test',
+    baseUrl: null,
     systemPrompt: null,
     isActive: true,
     autoReplyEnabled: false,
@@ -32,7 +34,7 @@ function errResponse(status: number, json: unknown): Response {
     ok: false,
     status,
     json: async () => json,
-    // The Gemini adapter peeks the error body via `res.clone()` before
+    // An adapter may peek the error body via `res.clone()` before
     // deferring to the shared mapper — hand back a fresh readable copy.
     clone: () => errResponse(status, json),
   } as unknown as Response
@@ -198,117 +200,7 @@ describe('generateReply — Anthropic', () => {
   })
 })
 
-describe('generateReply — Gemini', () => {
-  it('calls generateContent with the api-key header and parses candidate text', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      okResponse({
-        candidates: [{ content: { parts: [{ text: 'Hi there!' }], role: 'model' } }],
-        usageMetadata: {
-          promptTokenCount: 30,
-          candidatesTokenCount: 6,
-          totalTokenCount: 36,
-        },
-      }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const res = await generateReply({
-      config: config({ provider: 'gemini', model: 'gemini-2.5-flash', apiKey: 'AIza-x' }),
-      systemPrompt: 'sys',
-      messages: [{ role: 'user', content: 'Hello' }],
-    })
-
-    expect(res).toEqual({
-      text: 'Hi there!',
-      handoff: false,
-      // Gemini reports a total — normalizeUsage uses it as-is.
-      usage: { promptTokens: 30, completionTokens: 6, totalTokens: 36 },
-    })
-    const [url, opts] = fetchMock.mock.calls[0]
-    expect(url).toContain('generativelanguage.googleapis.com')
-    expect(url).toContain('gemini-2.5-flash:generateContent')
-    expect(opts.headers['x-goog-api-key']).toBe('AIza-x')
-    // system prompt travels in system_instruction, not contents.
-    const body = JSON.parse(opts.body)
-    expect(body.system_instruction.parts[0].text).toBe('sys')
-  })
-
-  it('maps a 400 "API key not valid" to an invalid_key AiError', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        errResponse(400, {
-          error: {
-            code: 400,
-            message: 'API key not valid. Please pass a valid API key.',
-            status: 'INVALID_ARGUMENT',
-          },
-        }),
-      ),
-    )
-
-    await expect(
-      generateReply({
-        config: config({ provider: 'gemini' }),
-        systemPrompt: 'sys',
-        messages: [{ role: 'user', content: 'Hi' }],
-      }),
-    ).rejects.toMatchObject({ code: 'invalid_key', status: 401 })
-  })
-
-  it('throws on an empty response (no candidates)', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okResponse({ candidates: [] })))
-    await expect(
-      generateReply({
-        config: config({ provider: 'gemini' }),
-        systemPrompt: 'sys',
-        messages: [{ role: 'user', content: 'Hi' }],
-      }),
-    ).rejects.toBeInstanceOf(AiError)
-  })
-
-  it('maps assistant turns to model and starts the transcript on the customer', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      okResponse({ candidates: [{ content: { parts: [{ text: 'ok' }], role: 'model' } }] }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    await generateReply({
-      config: config({ provider: 'gemini' }),
-      systemPrompt: 'sys',
-      messages: [
-        { role: 'assistant', content: 'Welcome!' },
-        { role: 'user', content: 'Hi' },
-      ],
-    })
-
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
-    // Leading assistant turn dropped; remaining user turn maps to role 'user'.
-    expect(body.contents).toHaveLength(1)
-    expect(body.contents[0].role).toBe('user')
-    expect(body.contents[0].parts[0].text).toBe('Hi')
-  })
-
-  it('detects handoff in the model output', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        okResponse({
-          candidates: [{ content: { parts: [{ text: '[[HANDOFF]]' }], role: 'model' } }],
-        }),
-      ),
-    )
-    const res = await generateReply({
-      config: config({ provider: 'gemini' }),
-      systemPrompt: 'sys',
-      messages: [{ role: 'user', content: 'I want a human' }],
-    })
-    expect(res.handoff).toBe(true)
-    expect(res.text).toBe('')
-  })
-})
-
-describe('generateReply — Gemini tool calling', () => {
+describe('generateReply — tools on a provider without a tool loop', () => {
   const fakeTool = {
     name: 'order_lookup',
     label: 'Order lookup',
@@ -324,61 +216,7 @@ describe('generateReply — Gemini tool calling', () => {
     contactPhone: '+1',
   }
 
-  it('runs the tool, feeds the result back, and returns the final text', async () => {
-    const fetchMock = vi
-      .fn()
-      // Round 1: the model asks to call the tool.
-      .mockResolvedValueOnce(
-        okResponse({
-          candidates: [
-            {
-              content: {
-                parts: [
-                  { functionCall: { name: 'order_lookup', args: { order_number: '1024' } } },
-                ],
-                role: 'model',
-              },
-            },
-          ],
-          usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 4, totalTokenCount: 24 },
-        }),
-      )
-      // Round 2: with the tool result in hand, it answers.
-      .mockResolvedValueOnce(
-        okResponse({
-          candidates: [
-            { content: { parts: [{ text: 'Your order is out for delivery! 📦' }], role: 'model' } },
-          ],
-          usageMetadata: { promptTokenCount: 30, candidatesTokenCount: 8, totalTokenCount: 38 },
-        }),
-      )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const res = await generateReply({
-      config: config({ provider: 'gemini' }),
-      systemPrompt: 'sys',
-      messages: [{ role: 'user', content: "Where's my order 1024?" }],
-      tools: [fakeTool],
-      toolContext,
-    })
-
-    expect(res.text).toBe('Your order is out for delivery! 📦')
-    // Tool executed once with the model's args + our trusted context.
-    expect(fakeTool.run).toHaveBeenCalledWith({ order_number: '1024' }, toolContext)
-    // Two round-trips: call + answer.
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    // Usage is summed across rounds.
-    expect(res.usage).toEqual({ promptTokens: 50, completionTokens: 12, totalTokens: 62 })
-    // Round 2's request carried the functionResponse back to the model.
-    const round2Body = JSON.parse(fetchMock.mock.calls[1][1].body)
-    const lastTurn = round2Body.contents[round2Body.contents.length - 1]
-    expect(lastTurn.parts[0].functionResponse.name).toBe('order_lookup')
-    expect(lastTurn.parts[0].functionResponse.response.result).toContain('out for delivery')
-    // The tool declarations were offered to the model.
-    expect(round2Body.tools[0].functionDeclarations[0].name).toBe('order_lookup')
-  })
-
-  it('ignores tools for non-Gemini providers (single-shot)', async () => {
+  it('ignores tools for OpenAI (single-shot)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       okResponse({ choices: [{ message: { content: 'Hi' } }] }),
     )
@@ -393,5 +231,119 @@ describe('generateReply — Gemini tool calling', () => {
     expect(res.text).toBe('Hi')
     expect(fakeTool.run).not.toHaveBeenCalled()
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('generateReply — OpenAI-compatible', () => {
+  it('uses the configured endpoint and max_tokens', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: 'Gateway reply' } }],
+          usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await generateReply({
+      config: config({
+        provider: 'openai_compatible',
+        model: 'llama-3.3-70b',
+        baseUrl: 'https://8.8.8.8/v1/',
+      }),
+      systemPrompt: 'sys',
+      messages: [{ role: 'user', content: 'Hi' }],
+    })
+
+    expect(result).toEqual({
+      text: 'Gateway reply',
+      handoff: false,
+      usage: { promptTokens: 12, completionTokens: 4, totalTokens: 16 },
+    })
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toBe('https://8.8.8.8/v1/chat/completions')
+    expect(opts.headers.Authorization).toBe('Bearer sk-test')
+    expect(JSON.parse(opts.body).max_tokens).toBe(MAX_OUTPUT_TOKENS)
+    expect(opts.redirect).toBe('manual')
+  })
+
+  it('blocks private hosts unless the operator explicitly allow-lists them', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const previous = process.env.AI_PROVIDER_ALLOWED_PRIVATE_HOSTS
+    delete process.env.AI_PROVIDER_ALLOWED_PRIVATE_HOSTS
+    try {
+      await expect(
+        generateReply({
+          config: config({
+            provider: 'openai_compatible',
+            baseUrl: 'https://127.0.0.1:11434/v1',
+          }),
+          systemPrompt: 'sys',
+          messages: [{ role: 'user', content: 'Hi' }],
+        }),
+      ).rejects.toMatchObject({ code: 'blocked_url', status: 400 })
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      if (previous === undefined) delete process.env.AI_PROVIDER_ALLOWED_PRIVATE_HOSTS
+      else process.env.AI_PROVIDER_ALLOWED_PRIVATE_HOSTS = previous
+    }
+  })
+
+  it('allows an operator-approved private host', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: 'Local reply' } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const previous = process.env.AI_PROVIDER_ALLOWED_PRIVATE_HOSTS
+    process.env.AI_PROVIDER_ALLOWED_PRIVATE_HOSTS = '127.0.0.1'
+    try {
+      const result = await generateReply({
+        config: config({
+          provider: 'openai_compatible',
+          model: 'llama3.2',
+          baseUrl: 'http://127.0.0.1:11434/v1',
+        }),
+        systemPrompt: 'sys',
+        messages: [{ role: 'user', content: 'Hi' }],
+      })
+      expect(result.text).toBe('Local reply')
+      expect(fetchMock).toHaveBeenCalledOnce()
+    } finally {
+      if (previous === undefined) delete process.env.AI_PROVIDER_ALLOWED_PRIVATE_HOSTS
+      else process.env.AI_PROVIDER_ALLOWED_PRIVATE_HOSTS = previous
+    }
+  })
+
+  it('does not follow redirects', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 302 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      generateReply({
+        config: config({
+          provider: 'openai_compatible',
+          baseUrl: 'https://8.8.8.8/v1',
+        }),
+        systemPrompt: 'sys',
+        messages: [{ role: 'user', content: 'Hi' }],
+      }),
+    ).rejects.toMatchObject({ code: 'provider_error' })
+
+    expect(fetchMock.mock.calls[0][1].redirect).toBe('manual')
   })
 })

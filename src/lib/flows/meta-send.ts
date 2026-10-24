@@ -20,7 +20,11 @@ import {
   isValidE164,
 } from '@/lib/whatsapp/phone-utils'
 import { resolveContactSendTarget } from '@/lib/whatsapp/wa-identity'
+import { assertConversationInAccount } from '@/lib/whatsapp/conversation-scope'
 import { supabaseAdmin } from './admin-client'
+import { getT } from '@/lib/i18n/translate'
+
+const t = getT('LibErrors')
 
 // ------------------------------------------------------------
 // Flows-side Meta sender (interactive variants).
@@ -53,7 +57,7 @@ export async function loadAccountMetaCredentials(
     .eq('account_id', accountId)
     .single()
   if (configErr || !config) {
-    throw new Error('WhatsApp not configured for this account')
+    throw new Error(t('send.notConfigured'))
   }
   return {
     phoneNumberId: config.phone_number_id,
@@ -103,15 +107,19 @@ export async function engineSendText(
     .eq('account_id', args.accountId)
     .maybeSingle()
   if (contactErr || !contact) {
-    throw new Error('contact not found for this account')
+    throw new Error(t('send.contactNotFound'))
   }
+
+  // Same for the conversation the message lands in — see
+  // conversation-scope.ts (GHSA-m4fx-g6pr-hrw8).
+  await assertConversationInAccount(db, args.conversationId, args.accountId)
 
   // Phone number, or the business-scoped user ID when Meta has never
   // given us a number for this customer (issue #519).
   const sendTarget = resolveContactSendTarget(contact)
   if (!sendTarget) {
     throw new Error(
-      `contact has no usable WhatsApp address (phone: ${contact.phone || 'none'})`
+      t('send.noWhatsAppAddress', { phone: contact.phone || t('send.none') })
     )
   }
   const sanitized = sendTarget.target
@@ -163,7 +171,7 @@ export async function engineSendText(
     ai_generated: args.aiGenerated ?? false,
   })
   if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+    throw new Error(t('send.dbInsertFailed', { message: msgErr.message }))
   }
 
   await db
@@ -174,6 +182,7 @@ export async function engineSendText(
       updated_at: new Date().toISOString(),
     })
     .eq('id', args.conversationId)
+    .eq('account_id', args.accountId)
 
   return { whatsapp_message_id: waMessageId }
 }
@@ -297,15 +306,19 @@ export async function engineSendMedia(
     .eq('account_id', args.accountId)
     .maybeSingle()
   if (contactErr || !contact) {
-    throw new Error('contact not found for this account')
+    throw new Error(t('send.contactNotFound'))
   }
+
+  // Same for the conversation the message lands in — see
+  // conversation-scope.ts (GHSA-m4fx-g6pr-hrw8).
+  await assertConversationInAccount(db, args.conversationId, args.accountId)
 
   // Phone number, or the business-scoped user ID when Meta has never
   // given us a number for this customer (issue #519).
   const sendTarget = resolveContactSendTarget(contact)
   if (!sendTarget) {
     throw new Error(
-      `contact has no usable WhatsApp address (phone: ${contact.phone || 'none'})`
+      t('send.noWhatsAppAddress', { phone: contact.phone || t('send.none') })
     )
   }
   const sanitized = sendTarget.target
@@ -364,7 +377,7 @@ export async function engineSendMedia(
     status: 'sent',
   })
   if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+    throw new Error(t('send.dbInsertFailed', { message: msgErr.message }))
   }
 
   await db
@@ -375,6 +388,7 @@ export async function engineSendMedia(
       updated_at: new Date().toISOString(),
     })
     .eq('id', args.conversationId)
+    .eq('account_id', args.accountId)
 
   return { whatsapp_message_id: waMessageId }
 }
@@ -487,15 +501,19 @@ async function sendInteractiveViaMeta(
     .eq('account_id', input.accountId)
     .maybeSingle()
   if (contactErr || !contact) {
-    throw new Error('contact not found for this account')
+    throw new Error(t('send.contactNotFound'))
   }
+
+  // Same for the conversation the message lands in — see
+  // conversation-scope.ts (GHSA-m4fx-g6pr-hrw8).
+  await assertConversationInAccount(db, input.conversationId, input.accountId)
 
   // Phone number, or the business-scoped user ID when Meta has never
   // given us a number for this customer (issue #519).
   const sendTarget = resolveContactSendTarget(contact)
   if (!sendTarget) {
     throw new Error(
-      `contact has no usable WhatsApp address (phone: ${contact.phone || 'none'})`
+      t('send.noWhatsAppAddress', { phone: contact.phone || t('send.none') })
     )
   }
   const sanitized = sendTarget.target
@@ -595,7 +613,7 @@ async function sendInteractiveViaMeta(
     status: 'sent',
   })
   if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+    throw new Error(t('send.dbInsertFailed', { message: msgErr.message }))
   }
 
   await db
@@ -606,6 +624,7 @@ async function sendInteractiveViaMeta(
       updated_at: new Date().toISOString(),
     })
     .eq('id', input.conversationId)
+    .eq('account_id', input.accountId)
 
   return { whatsapp_message_id: waMessageId }
 }

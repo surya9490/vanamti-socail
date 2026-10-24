@@ -797,6 +797,27 @@ export async function dispatchInboundToAiReply(
       return
     }
 
+    // Takeover check — an agent may have claimed the thread or paused the
+    // bot while we were generating (tool rounds can take 10–30s). Re-read
+    // right before sending so the bot never talks over a human.
+    const { data: convNow } = await db
+      .from('conversations')
+      .select('assigned_agent_id, ai_autoreply_disabled')
+      .eq('id', conversationId)
+      .maybeSingle()
+    const takeover = convNow as {
+      assigned_agent_id?: string | null
+      ai_autoreply_disabled?: boolean | null
+    } | null
+    if (takeover?.assigned_agent_id || takeover?.ai_autoreply_disabled) {
+      log.info('auto_reply.skipped', {
+        trace_id,
+        reason: 'taken_over_during_generation',
+        conversation_id: conversationId,
+      })
+      return
+    }
+
     // Counter increment for analytics — no cap enforced (operator
     // removed the per-conversation cap; sales conversations need
     // 5–10 turns to close). Fire-and-forget: a failure here must

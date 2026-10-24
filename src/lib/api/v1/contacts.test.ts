@@ -18,6 +18,7 @@ import {
   findOrCreateContact,
   setContactTags,
   ContactError,
+  contactSearchFilter,
 } from './contacts';
 
 describe('serializeContact', () => {
@@ -74,6 +75,18 @@ describe('findOrCreateContact', () => {
     await expect(
       findOrCreateContact(noopDb, 'acc', 'user', { phone: 'not-a-number' })
     ).rejects.toBeInstanceOf(ContactError);
+  });
+
+  it('rejects a number without a leading + before any DB call (#586)', async () => {
+    // "4155551212" is a US national number to the integrator but Meta
+    // would deliver it to +41 (Switzerland); persisting it would repeat
+    // that on every later send. Digits with a country code but no `+`
+    // are refused too — the API can't tell the two apart.
+    for (const phone of ['4155551212', '14155551212', '+1234567']) {
+      await expect(
+        findOrCreateContact(noopDb, 'acc', 'user', { phone })
+      ).rejects.toMatchObject({ status: 400 });
+    }
   });
 });
 
@@ -163,5 +176,29 @@ describe('setContactTags', () => {
 
     expect(addContactTagAndDispatch).not.toHaveBeenCalled();
     expect(removed.sort()).toEqual(['tag-a', 'tag-c']);
+  });
+});
+
+describe('contactSearchFilter', () => {
+  it('searches the phone column by digits only so a +E.164 query matches', () => {
+    expect(contactSearchFilter('+1 (415) 555-1234')).toBe(
+      'name.ilike.*+1 415 555-1234*,phone.ilike.*14155551234*'
+    );
+  });
+
+  it('skips the phone condition when the search has no digits', () => {
+    expect(contactSearchFilter('Jane')).toBe('name.ilike.*Jane*');
+  });
+
+  it('returns null for a search that sanitizes to nothing', () => {
+    expect(contactSearchFilter('  ,()*%  ')).toBeNull();
+  });
+
+  it('strips PostgREST delimiters and ilike wildcards from the term', () => {
+    expect(contactSearchFilter('a,b)c(d*e%f')).toBe('name.ilike.*abcdef*');
+  });
+
+  it('escapes the single-character ilike wildcard', () => {
+    expect(contactSearchFilter('jane_doe')).toBe('name.ilike.*jane\\_doe*');
   });
 });

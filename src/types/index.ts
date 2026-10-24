@@ -177,6 +177,9 @@ export interface Conversation {
   last_message_text?: string;
   last_message_at?: string;
   unread_count: number;
+  last_inbound_at?: string | null;
+  last_reply_at?: string | null;
+  closed_at?: string | null;
   created_at: string;
   updated_at: string;
   contact?: Contact;
@@ -587,9 +590,17 @@ export interface SendMessageStepConfig {
  * `send_buttons` / `send_list` step configs carry the full interactive
  * payload (same shape stored on messages + quick replies). `kind` is
  * implied by the step_type but kept on the payload for a uniform shape.
+ *
+ * `wait_for_reply` parks the run after the send until the contact's
+ * next inbound message, which then becomes `message_text` for the
+ * steps after it (migration 064). Not part of the Meta payload — the
+ * send path picks payload fields explicitly, so it never reaches Meta.
  */
-export type SendButtonsStepConfig = InteractiveMessagePayload;
-export type SendListStepConfig = InteractiveMessagePayload;
+export interface InteractiveStepOptions {
+  wait_for_reply?: boolean;
+}
+export type SendButtonsStepConfig = InteractiveMessagePayload & InteractiveStepOptions;
+export type SendListStepConfig = InteractiveMessagePayload & InteractiveStepOptions;
 
 export interface SendTemplateStepConfig {
   template_name: string;
@@ -643,6 +654,7 @@ export interface ConditionStepConfig {
   operand?: string;
   /** For contact_field equals / message_content contains — comparison value */
   value?: string;
+  timezone?: string;
 }
 
 export interface SendWebhookStepConfig {
