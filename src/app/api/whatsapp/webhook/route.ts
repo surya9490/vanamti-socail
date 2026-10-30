@@ -1,7 +1,7 @@
 import { NextResponse, after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
+import { getMediaUrl, downloadMedia, sendTextMessage } from '@/lib/whatsapp/meta-api'
 import { mirrorInboundMedia } from '@/lib/whatsapp/mirror-inbound-media'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import {
@@ -12,6 +12,12 @@ import {
   type WaIdentity,
 } from '@/lib/whatsapp/wa-identity'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
+import {
+  matchOptOutKeyword,
+  setContactOptOut,
+  OPT_OUT_CONFIRMATION,
+  OPT_IN_CONFIRMATION,
+} from '@/lib/contacts/opt-out'
 import { reopenClosedConversation } from '@/lib/conversations/reopen'
 import { claimFirstInboundMessage } from '@/lib/conversations/first-inbound'
 import {
@@ -445,7 +451,8 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
           // Default ON: the column is NOT NULL DEFAULT TRUE, but a row
           // read before migration 039 lands would have it undefined,
           // and losing attachments is the failure mode worth avoiding.
-          config.mirror_inbound_media !== false
+          config.mirror_inbound_media !== false,
+          config.phone_number_id
         )
       }
     }
@@ -566,6 +573,52 @@ async function handleStatusUpdate(
  * Runs on a best-effort basis — failures here must not break the
  * main inbound-message flow, so errors are swallowed with a log.
  */
+/**
+ * A STOP or START reply: set or clear the contact's opt-out, then confirm
+ * to the customer and mirror the confirmation into the inbox. The flag is
+ * what protects the customer, so a failed confirmation is only logged.
+ */
+async function handleOptOutReply(args: {
+  action: 'stop' | 'start'
+  contactId: string
+  conversationId: string
+  to: string
+  phoneNumberId: string
+  accessToken: string
+}) {
+  const { error: optErr } = await setContactOptOut(supabaseAdmin(), args.contactId, args.action)
+  if (optErr) console.error('[opt-out] failed to update contact flag:', optErr.message)
+
+  const confirmation = args.action === 'stop' ? OPT_OUT_CONFIRMATION : OPT_IN_CONFIRMATION
+  if (args.to && args.phoneNumberId) {
+    try {
+      const sent = await sendTextMessage({
+        phoneNumberId: args.phoneNumberId,
+        accessToken: args.accessToken,
+        to: args.to,
+        text: confirmation,
+      })
+      const now = new Date().toISOString()
+      const { error: botMsgErr } = await supabaseAdmin().from('messages').insert({
+        conversation_id: args.conversationId,
+        sender_type: 'bot',
+        content_type: 'text',
+        content_text: confirmation,
+        message_id: sent.messageId,
+        status: 'sent',
+      })
+      if (botMsgErr) console.error('[opt-out] failed to insert confirmation message:', botMsgErr.message)
+      await supabaseAdmin()
+        .from('conversations')
+        .update({ last_message_text: confirmation, last_message_at: now, updated_at: now })
+        .eq('id', args.conversationId)
+    } catch (err) {
+      console.error('[opt-out] confirmation send failed:', err instanceof Error ? err.message : err)
+    }
+  }
+  console.log(`[opt-out] contact ${args.contactId} ${args.action === 'stop' ? 'opted out' : 'opted back in'}`)
+}
+
 async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
   try {
     await flagBroadcastReply(supabaseAdmin(), accountId, contactId)
@@ -669,7 +722,9 @@ async function processMessage(
   accessToken: string,
   // Per-account opt-out for the inbound-media mirror (migration 039).
   // See parseMessageContent for what it turns off.
-  mirrorMedia: boolean
+  mirrorMedia: boolean,
+  // Sends the STOP / START confirmation reply.
+  phoneNumberId: string
 ) {
   // Phone number OR business-scoped user ID — Meta sends only the
   // latter for a sender who has adopted a WhatsApp username (#519).
@@ -858,6 +913,32 @@ async function processMessage(
   // so the broadcast's `replied_count` advances (via the aggregate
   // trigger installed in migration 003).
   await flagBroadcastReplyIfAny(accountId, contactRecord.id)
+
+  // ============================================================
+  // Marketing opt-out (STOP) / opt-in (START).
+  //
+  // Campaign templates end "Type STOP to unsubscribe", so a STOP has to
+  // land: flip contacts.opted_out_at, confirm to the customer (free-form
+  // — their message just opened the 24h window), and RETURN EARLY so
+  // flows, automations and the AI never answer a STOP with more
+  // messaging. Matching is whole-message only (lib/contacts/opt-out.ts),
+  // so "please don't stop my order" is an ordinary message.
+  //
+  // Re-added: it shipped in 653304e and was lost in the upstream merge
+  // 7492ddf, after which a STOP reply was just another inbound text.
+  // ============================================================
+  const optOutAction = matchOptOutKeyword(contentText ?? message.text?.body, interactiveReplyId)
+  if (optOutAction) {
+    await handleOptOutReply({
+      action: optOutAction,
+      contactId: contactRecord.id,
+      conversationId: conversation.id,
+      to: identity.phone || identity.waUserId || '',
+      phoneNumberId,
+      accessToken,
+    })
+    return
+  }
 
   // ============================================================
   // Flow runner dispatch.

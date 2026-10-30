@@ -43,6 +43,7 @@ import {
   SendMessageError,
 } from '@/lib/whatsapp/send-message';
 import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive';
+import { isPhoneOptedOut, loadOptedOutPhoneSuffixes } from '@/lib/contacts/opt-out';
 
 export async function POST(request: Request) {
   try {
@@ -137,10 +138,10 @@ export async function POST(request: Request) {
     if (templateName) {
       const { data: knownRows } = await ctx.supabase
         .from('message_templates')
-        .select('language, status')
+        .select('language, status, category')
         .eq('account_id', ctx.accountId)
         .eq('name', templateName);
-      const known = (knownRows ?? []) as { language?: string; status?: string }[];
+      const known = (knownRows ?? []) as { language?: string; status?: string; category?: string }[];
       const approvedLangs = known
         .filter((r) => r.status === 'APPROVED')
         .map((r) => r.language)
@@ -170,6 +171,23 @@ export async function POST(request: Request) {
           providedLanguage && approvedLangs.includes(providedLanguage)
             ? providedLanguage
             : approvedLangs[0];
+      }
+
+      // Someone who replied STOP gets no more MARKETING templates from any
+      // caller — the same rule broadcasts follow. Utility templates (order
+      // updates, codes they asked for) still go. Refused before the
+      // contact lookup, with a code the caller can tell from a failure:
+      // the Vanamati app records these as "replied STOP", not as errors.
+      const isMarketing = known.some((r) => (r.category ?? '').toLowerCase() === 'marketing');
+      if (isMarketing) {
+        const optedOut = await loadOptedOutPhoneSuffixes(ctx.supabase, ctx.accountId);
+        if (isPhoneOptedOut(optedOut, to)) {
+          return fail(
+            'opted_out',
+            `This contact replied STOP, so marketing templates like "${templateName}" aren't sent to them.`,
+            422
+          );
+        }
       }
     }
 
