@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { fetchRecentCustomerVerdict } from '@/lib/ai/recent-customer.server'
 import { fetchSupportSession } from '@/lib/ai/order-guard.server'
 import { fetchCustomerDeclined } from '@/lib/ai/closing.server'
+import { fetchNudgeBudget, MAX_NUDGES_PER_DAY } from '@/lib/ai/nudge-cap.server'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { detectCloseStage, pickNextNudge, STAGE_CONFIG } from '@/lib/ai/close-nudge'
 
@@ -34,6 +35,8 @@ import { detectCloseStage, pickNextNudge, STAGE_CONFIG } from '@/lib/ai/close-nu
 //   * Per-stage cadence has elapsed (1 min / 3 min / etc.)
 //   * Fewer than the per-stage max nudges already sent for THIS
 //     specific triggering bot message
+//   * The contact has had fewer than MAX_NUDGES_PER_DAY (2)
+//     follow-ups in the last 24h, re-engagement sends included
 //
 // Cron cadence: run every minute (`* * * * *` on Railway).
 //
@@ -227,7 +230,7 @@ export async function GET(request: Request): Promise<Response> {
     // failed this check forever — 13 first nudges, 0 second nudges
     // in the ledger as of 2026-09-20.) Nudges are never candidates
     // themselves (filtered above), and the per-stage cap plus the
-    // 6h hard cap bound the count, so this can't re-open the loop.
+    // daily cap bound the count, so this can't re-open the loop.
     const { data: latest } = await db
       .from('messages')
       .select('id, sender_type, created_at')
@@ -241,23 +244,17 @@ export async function GET(request: Request): Promise<Response> {
       continue
     }
 
-    // Per-conversation HARD CAP (belt-and-braces). Regardless of
-    // stage or which bot message triggered them, never send more
-    // than CONVERSATION_MAX_NUDGES follow-ups to any one contact
-    // inside any 6h window. Protects against future regex slips or
-    // corrupted ledger rows re-triggering endlessly — as happened
-    // once when the address-ask regex matched the nudge's own
-    // paraphrase.
-    const CONVERSATION_MAX_NUDGES = 3
-    const capCutoff = new Date(now.getTime() - 6 * 60 * 60 * 1000).toISOString()
-    const { count: totalRecentNudges } = await db
-      .from('conversation_close_nudges')
-      .select('id', { count: 'exact', head: true })
-      .eq('conversation_id', c.id)
-      .gte('sent_at', capCutoff)
-    if ((totalRecentNudges ?? 0) >= CONVERSATION_MAX_NUDGES) {
+    // Per-customer DAILY CAP. Regardless of stage or which bot
+    // message triggered them, never more than MAX_NUDGES_PER_DAY
+    // follow-ups to one contact in 24h — close-nudges and
+    // re-engagement sends combined (nudge-cap.server.ts). Also the
+    // backstop against regex slips or corrupted ledger rows
+    // re-triggering endlessly — as happened once when the
+    // address-ask regex matched the nudge's own paraphrase.
+    const budget = await fetchNudgeBudget(db, c.contact_id, now.getTime())
+    if (budget.capReached) {
       console.log(
-        `[close-nudge] conv=${c.id} hit hard cap (${totalRecentNudges}/${CONVERSATION_MAX_NUDGES}) — skip`,
+        `[close-nudge] conv=${c.id} hit daily cap (${budget.sent ?? 'lookup failed'}/${MAX_NUDGES_PER_DAY}) — skip`,
       )
       skipped += 1
       continue

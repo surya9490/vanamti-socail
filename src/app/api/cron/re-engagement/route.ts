@@ -19,6 +19,7 @@ import {
 import { fetchRecentCustomerVerdict } from '@/lib/ai/recent-customer.server'
 import { fetchSupportSession } from '@/lib/ai/order-guard.server'
 import { customerDeclined } from '@/lib/ai/closing'
+import { fetchNudgeBudget } from '@/lib/ai/nudge-cap.server'
 import { idChunks } from '@/lib/supabase/id-chunks'
 
 const SESSION_WINDOW_HOURS = 24
@@ -41,6 +42,8 @@ const SESSION_WINDOW_HOURS = 24
 //     truly dark contacts)
 //   * this stage NOT already sent to this contact (idempotency
 //     lives in contact_re_engagement_sends)
+//   * the contact has had fewer than 2 follow-ups in the last 24h,
+//     close-nudges included (lib/ai/nudge-cap.server.ts)
 //
 // Nothing is sent during quiet hours (default 22:00–08:00
 // Asia/Kolkata); the run simply returns and the stage fires on the
@@ -406,6 +409,16 @@ export async function GET(request: Request): Promise<Response> {
             `[re-engagement] skip contact=${contact.id} stage=${stage.id} (${stage.template_type}): out of 24h session (${hoursSince.toFixed(1)}h)`,
           )
           continue
+        }
+
+        // Daily cap across both follow-up crons: at most
+        // MAX_NUDGES_PER_DAY to this contact in 24h, close-nudges
+        // included (nudge-cap.server.ts). Checked once a stage is due,
+        // so contacts with nothing to send cost no lookup.
+        const budget = await fetchNudgeBudget(db, contact.id, now)
+        if (budget.capReached) {
+          skipped.daily_nudge_cap = (skipped.daily_nudge_cap ?? 0) + 1
+          break
         }
 
         attempted += 1

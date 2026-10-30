@@ -39,7 +39,9 @@
 //     they write, not before.
 //
 // Plus a quiet-hours window (default 22:00–08:00 Asia/Kolkata): a
-// nudge at 1 am reads as spam and earns blocks.
+// nudge at 1 am reads as spam and earns blocks. And the per-customer
+// daily cap — 2 follow-ups in 24h across both crons — which the cron
+// checks itself (nudge-cap.server.ts) because it needs the ledgers.
 // ============================================================
 
 import { detectCloseStage, type CloseStage } from './close-nudge'
@@ -155,6 +157,8 @@ export type SkipReason =
   | 'support_session'
   | 'customer_declined'
   | 'too_old'
+  /** Set by the cron, not evaluateThread: 2 follow-ups in 24h already. */
+  | 'daily_nudge_cap'
 
 export type ThreadVerdict =
   | { eligible: true; hoursSince: number }
