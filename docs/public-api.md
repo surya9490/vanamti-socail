@@ -171,6 +171,36 @@ Domain error codes beyond the table above: `whatsapp_not_configured`
 (400), `meta_error` (502 — the request reached Meta and it rejected the
 send), `template_malformed` (500).
 
+### `GET /api/v1/messages?ids=…`
+
+Where messages you sent got to. Scope: `messages:read`. Pass up to 100
+`message_id`s from `POST /api/v1/messages`, comma-separated. An id that
+isn't your account's is left out of the answer, not an error.
+
+A `201` from the send only means Meta accepted the message. Meta can
+still refuse to deliver it afterwards — `131049` ("not delivered to
+maintain healthy ecosystem engagement"), `131026` ("message
+undeliverable") — and that arrives later, by webhook. Poll this to find
+out.
+
+```json
+{
+  "data": [
+    {
+      "id": "…",
+      "whatsapp_message_id": "wamid.…",
+      "status": "failed",
+      "error_code": 131049,
+      "error_title": "This message was not delivered to maintain healthy ecosystem engagement.",
+      "error_details": "In order to maintain a healthy ecosystem engagement, the message failed to be delivered."
+    }
+  ]
+}
+```
+
+`status` is `sending`, `sent`, `delivered`, `read` or `failed`; the
+`error_*` fields are only set on `failed`.
+
 ### `GET /api/v1/contacts`
 
 List contacts, newest first. Scope: `contacts:read`. Paginated (see

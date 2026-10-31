@@ -29,10 +29,23 @@
 // Response (201):
 //   { "data": { "message_id", "whatsapp_message_id", "conversation_id",
 //               "contact_id", "contact_created" } }
+//
+// GET /api/v1/messages?ids=<uuid>,<uuid> — where those messages got to
+// (scope: messages:read), by the `message_id`s POST returned. Up to
+// 100 ids; an id that isn't the key's account's is left out, not an
+// error. A Meta delivery failure (e.g. 131049, held back "to maintain
+// healthy ecosystem engagement") arrives by webhook after the send
+// succeeded, so this is how a sender learns of it.
+//
+// Response (200):
+//   { "data": [{ "id", "whatsapp_message_id", "status",
+//                "error_code", "error_title", "error_details" }] }
+//   status: sending | sent | delivered | read | failed
 // ============================================================
 
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { isUuid } from '@/lib/api/v1/pagination';
 import {
   resolveConversationByPhone,
   rollbackEmptyShell,
@@ -44,6 +57,51 @@ import {
 } from '@/lib/whatsapp/send-message';
 import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive';
 import { isPhoneOptedOut, loadOptedOutPhoneSuffixes } from '@/lib/contacts/opt-out';
+
+const MAX_STATUS_IDS = 100;
+
+export async function GET(request: Request) {
+  try {
+    const ctx = await requireApiKey(request, 'messages:read');
+
+    const raw = new URL(request.url).searchParams.get('ids') ?? '';
+    const ids = [...new Set(raw.split(',').map((id) => id.trim()).filter(Boolean))];
+    if (ids.length === 0) {
+      return fail('bad_request', "'ids' is required: message ids, comma-separated", 400);
+    }
+    if (ids.length > MAX_STATUS_IDS) {
+      return fail('bad_request', `At most ${MAX_STATUS_IDS} ids per request`, 400);
+    }
+    if (!ids.every(isUuid)) {
+      return fail('bad_request', "Every id in 'ids' must be a message id (UUID)", 400);
+    }
+
+    const { data, error } = await ctx.supabase
+      .from('messages')
+      .select('id, message_id, status, error_code, error_title, error_details, conversations!inner(account_id)')
+      .in('id', ids)
+      .eq('conversations.account_id', ctx.accountId);
+    if (error) {
+      console.error('[api/v1/messages] status read error:', error);
+      return fail('internal', 'Failed to read message status', 500);
+    }
+
+    // error_code is TEXT in the table (migration 028 made it first).
+    const code = (value: unknown) => (value == null || value === '' || Number.isNaN(Number(value)) ? null : Number(value));
+    return ok(
+      (data ?? []).map((m) => ({
+        id: m.id,
+        whatsapp_message_id: m.message_id ?? null,
+        status: m.status,
+        error_code: code(m.error_code),
+        error_title: m.error_title ?? null,
+        error_details: m.error_details ?? null,
+      }))
+    );
+  } catch (err) {
+    return toApiErrorResponse(err);
+  }
+}
 
 export async function POST(request: Request) {
   try {
