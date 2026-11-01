@@ -75,7 +75,7 @@ type ResolvedLineItem = { variant_id: string; quantity: number }
  * Returns a string on any error (matches the tool contract that
  * tool functions return a string message to the model on failure).
  */
-async function resolveLineItem(
+export async function resolveLineItem(
   args: LineItemArg,
   ctx: Parameters<AiTool['run']>[1],
 ): Promise<ResolvedLineItem | string> {
@@ -152,6 +152,7 @@ async function resolveLineItem(
     ? ((product as { variants: unknown[] }).variants as Array<{
         id?: string
         title?: string | null
+        is_available?: boolean
       }>)
     : []
 
@@ -186,6 +187,14 @@ async function resolveLineItem(
     if (!match) {
       return `Variant ${resolvedVariantId} isn't on product ${resolvedShopProductId}. Call product_lookup to get current variant ids for this product and re-call with the correct one.`
     }
+  }
+
+  // Shopify has it sold out — a payment link would take money for stock
+  // we don't have. Missing flag (older cache rows) = in stock.
+  const chosen = variants.find((v) => v.id === resolvedVariantId)
+  if (chosen?.is_available === false) {
+    const name = [(product as { title?: string }).title, chosen.title].filter(Boolean).join(' ')
+    return `${name || 'This item'} is SOLD OUT — do NOT create an order for it. Tell the customer it's out of stock, give the restock date if the knowledge base has one, and offer an in-stock size or product instead.`
   }
 
   return { variant_id: resolvedVariantId, quantity }

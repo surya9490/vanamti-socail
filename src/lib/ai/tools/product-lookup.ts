@@ -65,14 +65,34 @@ function coerceVariants(raw: unknown): ProductVariant[] {
   )
 }
 
+// Shopify's availableForSale, mirrored by the Vanamati feed. A variant
+// cached before the flag existed has no value — treat that as in stock.
+function isSoldOut(v: ProductVariant): boolean {
+  return v.is_available === false
+}
+
 function formatVariantLine(v: ProductVariant, currency: string | null): string {
   const label = v.title ?? 'default'
   const price = v.price != null ? ` — ${currencySymbol(currency)}${v.price}` : ''
+  // No variant_id for a sold-out size: there's nothing to order.
+  if (isSoldOut(v)) return `    - ${label}${price} — SOLD OUT`
   return `    - ${label}${price} [variant_id: ${v.id}]`
 }
 
-function formatRow(row: ProductRow): string {
+export function formatRow(row: ProductRow): string {
   const variants = coerceVariants(row.variants)
+
+  // Every size sold out: no ids and no link, so the model has nothing
+  // to sell from. Live 2026-11-01: the bot quoted Iyappa Ghee's three
+  // sizes and its link while Shopify had all of them sold out.
+  if (variants.length > 0 && variants.every(isSoldOut)) {
+    return (
+      `• ${row.title}${formatPriceRange(row)} — SOLD OUT (every size)` +
+      `\n    (do NOT share the link or offer to order it — tell the customer it's out of stock, ` +
+      `give the restock date if the knowledge base has one, and suggest an in-stock alternative)`
+    )
+  }
+
   // product_id is REQUIRED for the model to pass to create_draft_order.
   // Show it prominently in a labelled bracket — customer never sees the
   // tool output, so being verbose here is safe and it stops the model
@@ -130,6 +150,7 @@ export const productLookupTool: AiTool = {
     'For browsing ("what do you sell", "show me", a category like "honey") use send_product_catalog instead — never paste this tool\'s output to the customer as a list of products. ' +
     'Pass a search term (e.g. "forest honey"); omitting it returns a small selection of active products. ' +
     'Returns up to 5 products with prices and (for multi-variant products) each variant with its variant_id. ' +
+    'A size or product marked SOLD OUT cannot be ordered — never offer it or its link; offer an in-stock size or product instead. ' +
     'Quote titles + prices verbatim rather than inventing numbers. Never show variant_id values to the customer — they are for calling create_draft_order.',
   parameters: {
     type: 'OBJECT',

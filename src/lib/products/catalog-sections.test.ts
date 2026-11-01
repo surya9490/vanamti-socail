@@ -40,6 +40,16 @@ describe('groupCatalogSections', () => {
     expect(groupCatalogSections(rows).retailerIds).toHaveLength(12)
   })
 
+  it('leaves out a product sold out in every size, and picks the cheapest size still in stock', () => {
+    const iyappa = product('Iyappa Ghee', 'Ghee', [['g2-250', 349], ['g2-500', 649]])
+    iyappa.variants.forEach((v) => (v.is_available = false))
+    const a2 = product('A2 Cow Ghee', 'Ghee', [['g1-250', 599], ['g1-500', 1099]])
+    a2.variants[0].is_available = false
+    const { retailerIds, meta } = groupCatalogSections([a2, iyappa, product('Acacia Honey', 'Honey', [['h1', 399]])])
+    expect(retailerIds).toEqual(['g1-500', 'h1'])
+    expect(meta['g1-500']).toMatchObject({ title: 'A2 Cow Ghee', price: 1099 })
+  })
+
   it('puts untyped products in a trailing "More products" section', () => {
     const { sections } = groupCatalogSections([
       product('Gift Box', null, [['x1', 999]]),

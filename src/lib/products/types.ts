@@ -9,8 +9,10 @@
  * the shape create_draft_order needs to pass back for the
  * draftOrderCreate mutation — either a bare numeric ("12345") or a
  * GID ("gid://shopify/ProductVariant/12345"), whichever Vanamati
- * sent. `is_available` mirrors Shopify's inventory availability but
- * per operator preference is not gated on for chat sales.
+ * sent. `is_available` is Shopify's availableForSale: false means the
+ * store won't sell it (tracked, at zero, "deny"), so the AI won't
+ * either — product_lookup marks it SOLD OUT, create_draft_order
+ * refuses it, and the catalog list skips a product with none left.
  */
 export interface ProductVariant {
   id: string

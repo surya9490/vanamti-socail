@@ -179,7 +179,9 @@ function sectionTitle(raw: string): string {
   return raw.trim().slice(0, META_SECTION_TITLE_MAX)
 }
 
-/** Products we can send, keyed by shop_product_id, with their cheapest variant. */
+/** Products we can send, keyed by shop_product_id, with their cheapest
+ *  in-stock variant. A product sold out in every size is left out — a
+ *  customer who taps it can't buy it. */
 function sendableEntries(
   rows: ProductRow[],
   prefix: string,
@@ -189,7 +191,7 @@ function sendableEntries(
   for (const p of rows) {
     const variants = Array.isArray(p.variants) ? p.variants : []
     const cheapest = [...variants]
-      .filter((v) => v && v.id)
+      .filter((v) => v && v.id && v.is_available !== false)
       .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))[0]
     if (!cheapest?.id) continue
     const retailerId = `${prefix}${cheapest.id}`
