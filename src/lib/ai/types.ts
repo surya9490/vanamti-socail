@@ -70,6 +70,11 @@ export interface AiUsage {
   promptTokens: number
   completionTokens: number
   totalTokens: number
+  /** Anthropic prompt-cache tokens, billed apart from promptTokens —
+   *  writes at 1.25x the input price, reads at 0.1x. Not in
+   *  totalTokens. Absent when the provider reported none. */
+  cacheWriteTokens?: number
+  cacheReadTokens?: number
 }
 
 /** Raw text + usage a provider adapter returns before handoff parsing. */

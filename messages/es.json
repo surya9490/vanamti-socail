@@ -2364,6 +2364,7 @@
       "empty": "Aún no hay uso de IA en los últimos {days} días.",
       "emptyHint": "Esto se llena a medida que el asistente redacta y responde automáticamente.",
       "totalTokens": "Tokens totales",
+      "cachedPromptTokens": "Tokens de prompt en caché",
       "llmCalls": "Llamadas al LLM",
       "autoReply": "Respuesta automática",
       "drafts": "Borradores",

@@ -17,7 +17,7 @@ describe('logAiUsage', () => {
       mode: 'auto_reply',
       provider: 'anthropic',
       model: 'claude-x',
-      usage: { promptTokens: 30, completionTokens: 6, totalTokens: 36 },
+      usage: { promptTokens: 30, completionTokens: 6, totalTokens: 36, cacheWriteTokens: 9000, cacheReadTokens: 800 },
     })
     expect(from).toHaveBeenCalledWith('ai_usage_log')
     expect(insert).toHaveBeenCalledWith({
@@ -30,7 +30,22 @@ describe('logAiUsage', () => {
       prompt_tokens: 30,
       completion_tokens: 6,
       total_tokens: 36,
+      cache_write_tokens: 9000,
+      cache_read_tokens: 800,
     })
+  })
+
+  it('logs 0 cache tokens for a provider that reports none', async () => {
+    const { db, insert } = fakeDb()
+    await logAiUsage(db, {
+      accountId: 'acct-1',
+      conversationId: null,
+      mode: 'draft',
+      provider: 'openai',
+      model: 'gpt-x',
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    })
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ cache_write_tokens: 0, cache_read_tokens: 0 }))
   })
 
   it('is a no-op when the provider reported no usage', async () => {

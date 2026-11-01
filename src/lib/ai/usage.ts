@@ -46,6 +46,8 @@ export async function logAiUsage(
       prompt_tokens: args.usage.promptTokens,
       completion_tokens: args.usage.completionTokens,
       total_tokens: args.usage.totalTokens,
+      cache_write_tokens: args.usage.cacheWriteTokens ?? 0,
+      cache_read_tokens: args.usage.cacheReadTokens ?? 0,
     })
     if (error) {
       console.error('[ai usage] log insert failed:', error)

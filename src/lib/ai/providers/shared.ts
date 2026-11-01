@@ -23,11 +23,14 @@ export interface ProviderArgs {
  * omit counts). Returns null when there's nothing usable, so logging can
  * distinguish "no usage reported" from "zero tokens". `total` falls back
  * to prompt + completion when the provider doesn't send it (Anthropic).
+ * Cache counts (Anthropic) ride along only when non-zero.
  */
 export function normalizeUsage(raw: {
   prompt?: unknown
   completion?: unknown
   total?: unknown
+  cacheWrite?: unknown
+  cacheRead?: unknown
 }): AiUsage | null {
   const num = (v: unknown): number =>
     typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0
@@ -35,10 +38,18 @@ export function normalizeUsage(raw: {
   const completionTokens = num(raw.completion)
   const total = num(raw.total)
   const totalTokens = total > 0 ? total : promptTokens + completionTokens
-  if (promptTokens === 0 && completionTokens === 0 && totalTokens === 0) {
+  const cacheWriteTokens = num(raw.cacheWrite)
+  const cacheReadTokens = num(raw.cacheRead)
+  if (totalTokens === 0 && cacheWriteTokens === 0 && cacheReadTokens === 0) {
     return null
   }
-  return { promptTokens, completionTokens, totalTokens }
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    ...(cacheWriteTokens > 0 && { cacheWriteTokens }),
+    ...(cacheReadTokens > 0 && { cacheReadTokens }),
+  }
 }
 
 /** Sum two usage records (either may be null) — used to accumulate token
@@ -46,10 +57,14 @@ export function normalizeUsage(raw: {
 export function addUsage(a: AiUsage | null, b: AiUsage | null): AiUsage | null {
   if (!a) return b
   if (!b) return a
+  const cacheWriteTokens = (a.cacheWriteTokens ?? 0) + (b.cacheWriteTokens ?? 0)
+  const cacheReadTokens = (a.cacheReadTokens ?? 0) + (b.cacheReadTokens ?? 0)
   return {
     promptTokens: a.promptTokens + b.promptTokens,
     completionTokens: a.completionTokens + b.completionTokens,
     totalTokens: a.totalTokens + b.totalTokens,
+    ...(cacheWriteTokens > 0 && { cacheWriteTokens }),
+    ...(cacheReadTokens > 0 && { cacheReadTokens }),
   }
 }
 

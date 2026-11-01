@@ -2364,6 +2364,7 @@
       "empty": "최근 {days}일 동안 AI 사용량이 없습니다.",
       "emptyHint": "어시스턴트가 초안을 작성하고 자동 응답하면 채워집니다.",
       "totalTokens": "총 토큰",
+      "cachedPromptTokens": "캐시된 프롬프트 토큰",
       "llmCalls": "LLM 호출",
       "autoReply": "자동 응답",
       "drafts": "초안",

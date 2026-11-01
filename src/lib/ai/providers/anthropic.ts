@@ -1,5 +1,5 @@
 import { AiError, type AiUsage, type ChatMessage, type ProviderResult } from '../types'
-import { MAX_OUTPUT_TOKENS } from '../defaults'
+import { MAX_OUTPUT_TOKENS, REPLY_CONTEXT_HEADING } from '../defaults'
 import type { AiTool, ToolContext, ToolParameters } from '../tools/registry'
 import {
   addUsage,
@@ -70,7 +70,12 @@ interface AnthropicMessage {
 interface AnthropicResponse {
   content?: AnthropicContentBlock[]
   stop_reason?: 'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use'
-  usage?: { input_tokens?: number; output_tokens?: number }
+  usage?: {
+    input_tokens?: number
+    output_tokens?: number
+    cache_creation_input_tokens?: number
+    cache_read_input_tokens?: number
+  }
 }
 
 /**
@@ -187,33 +192,31 @@ async function postAnthropic(
 }
 
 /**
- * Wrap the system prompt in Anthropic's cache_control block. The
- * system prompt is the same on every reply for a given account
- * (~3K tokens); marking it ephemeral tells Anthropic to cache it
- * for 5 min so subsequent requests only pay ~10% of the input cost
- * on the cached prefix. On a typical sales conversation (5-10 turns
- * within a session) this saves 30-50% of prompt-side spend.
+ * The system prompt as cached blocks. Caching is a prefix match over
+ * tools → system, so the prompt is split at REPLY_CONTEXT_HEADING:
  *
- * Anthropic prompt caching:
- *   - system as an array of blocks with cache_control on the ones
- *     to cache
- *   - eligible prefix must be >=1024 tokens (Sonnet 5) — our system
- *     prompt is ~3K, comfortably over the floor
- *   - separately-billable "cache write" on first call, then "cache
- *     read" (~0.1x cost) on subsequent calls within the 5-min TTL
+ *   1. the rules (~6.5K tokens, with the ~2K of tool definitions in
+ *      front) — byte-identical on every reply, so any chat that
+ *      replies within 5 minutes of another reads it at 0.1x instead
+ *      of writing it at 1.25x. Before the split, the customer's name
+ *      and intent sat near the top, every reply wrote the whole
+ *      ~10K-token prompt fresh, and that write was ~80% of the bill
+ *      (Oct 2026). 46% of October's replies came within 5 minutes of
+ *      the previous one.
+ *   2. this reply's context (customer, intent, KB excerpts) — cached
+ *      too, so the extra rounds of a tool loop read it.
+ *
+ * A prompt without the heading (validate, a draft with no KB) stays
+ * one block. Sonnet 5's minimum cacheable prefix is 1024 tokens.
  */
-function cachedSystemBlock(systemPrompt: string): Array<{
+export function cachedSystemBlock(systemPrompt: string): Array<{
   type: 'text'
   text: string
   cache_control?: { type: 'ephemeral' }
 }> {
-  return [
-    {
-      type: 'text',
-      text: systemPrompt,
-      cache_control: { type: 'ephemeral' },
-    },
-  ]
+  const at = systemPrompt.indexOf(`\n\n${REPLY_CONTEXT_HEADING}`)
+  const blocks = at > 0 ? [systemPrompt.slice(0, at), systemPrompt.slice(at + 2)] : [systemPrompt]
+  return blocks.map((text) => ({ type: 'text', text, cache_control: { type: 'ephemeral' } }))
 }
 
 /** Extract joined text from an Anthropic response's content blocks. */
@@ -225,11 +228,14 @@ function extractText(data: AnthropicResponse): string {
     .trim()
 }
 
-/** Normalize Anthropic's input/output token counts into our AiUsage. */
-function usageFrom(data: AnthropicResponse): AiUsage | null {
+/** Normalize Anthropic's token counts into our AiUsage. input_tokens is
+ *  only the uncached part; cached prompt tokens come separately. */
+export function usageFrom(data: AnthropicResponse): AiUsage | null {
   return normalizeUsage({
     prompt: data.usage?.input_tokens,
     completion: data.usage?.output_tokens,
+    cacheWrite: data.usage?.cache_creation_input_tokens,
+    cacheRead: data.usage?.cache_read_input_tokens,
   })
 }
 

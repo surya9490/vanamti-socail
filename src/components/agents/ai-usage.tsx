@@ -33,6 +33,8 @@ interface UsageResponse {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    cache_write_tokens: number;
+    cache_read_tokens: number;
   };
   by_mode: {
     auto_reply: { calls: number; tokens: number };
@@ -152,8 +154,12 @@ export function AiUsageCard() {
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
               <Stat label={t('totalTokens')} value={formatCompactNumber(data.totals.total_tokens)} />
+              <Stat
+                label={t('cachedPromptTokens')}
+                value={formatCompactNumber(data.totals.cache_write_tokens + data.totals.cache_read_tokens)}
+              />
               <Stat label={t('llmCalls')} value={String(data.totals.calls)} />
               <Stat
                 label={t('autoReply')}

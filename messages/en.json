@@ -2364,6 +2364,7 @@
       "empty": "No AI usage in the last {days} days yet.",
       "emptyHint": "This fills in as the assistant drafts and auto-replies.",
       "totalTokens": "Total tokens",
+      "cachedPromptTokens": "Cached prompt tokens",
       "llmCalls": "LLM calls",
       "autoReply": "Auto-reply",
       "drafts": "Drafts",

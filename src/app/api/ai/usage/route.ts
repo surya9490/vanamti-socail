@@ -22,6 +22,8 @@ interface UsageRow {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
 }
 
 /**
@@ -58,7 +60,7 @@ export async function GET(request: Request) {
           supabase
             .from('ai_usage_log')
             .select(
-              'created_at, mode, provider, model, prompt_tokens, completion_tokens, total_tokens',
+              'created_at, mode, provider, model, prompt_tokens, completion_tokens, total_tokens, cache_write_tokens, cache_read_tokens',
             )
             .eq('account_id', accountId)
             .gte('created_at', since.toISOString())
@@ -82,6 +84,8 @@ export async function GET(request: Request) {
     let promptTokens = 0
     let completionTokens = 0
     let totalTokens = 0
+    let cacheWriteTokens = 0
+    let cacheReadTokens = 0
 
     // Per-mode + per-model tallies.
     const byMode = {
@@ -104,6 +108,8 @@ export async function GET(request: Request) {
       promptTokens += r.prompt_tokens
       completionTokens += r.completion_tokens
       totalTokens += r.total_tokens
+      cacheWriteTokens += r.cache_write_tokens
+      cacheReadTokens += r.cache_read_tokens
 
       // `mode` is DB-CHECK-constrained to these two values.
       byMode[r.mode].calls += 1
@@ -135,6 +141,8 @@ export async function GET(request: Request) {
         prompt_tokens: promptTokens,
         completion_tokens: completionTokens,
         total_tokens: totalTokens,
+        cache_write_tokens: cacheWriteTokens,
+        cache_read_tokens: cacheReadTokens,
       },
       by_mode: byMode,
       by_model: byModel,
