@@ -70,6 +70,14 @@ describe('extractText', () => {
     expect(text).not.toContain('<')
   })
 
+  it('keeps only <main> when the page has one', () => {
+    const html =
+      '<body><cart-drawer><p>Your cart is empty</p></cart-drawer><header><nav>Shop all</nav></header>' +
+      '<main id="MainContent"><h1>Iyappa Cow Ghee</h1><p>Hand-boiled in Rasipuram.</p></main>' +
+      '<footer><p>Track your order</p></footer></body>'
+    expect(extractText(html)).toBe('Iyappa Cow Ghee\nHand-boiled in Rasipuram.')
+  })
+
   it('turns block boundaries into paragraph breaks', () => {
     const text = extractText('<p>one</p><p>two</p>')
     expect(text).toBe('one\ntwo')

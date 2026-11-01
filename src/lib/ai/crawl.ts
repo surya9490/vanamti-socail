@@ -86,6 +86,13 @@ export function extractText(html: string): string {
   // Drop non-content elements wholesale.
   s = s.replace(/<(script|style|noscript|template|svg)\b[\s\S]*?<\/\1>/gi, ' ')
   s = s.replace(/<head\b[\s\S]*?<\/head>/gi, ' ')
+  // Keep only <main> when the page has one: the header, cart drawer,
+  // menus and footer around it repeat on every page. Oct 2026: 35 of
+  // 275 KB chunks were that ("Skip to content / Your Cart / Popular
+  // right now…", with a stale offer banner), taking 2 of the 5 KB
+  // slots on a question about Iyappa ghee.
+  const main = s.match(/<main\b[^>]*>([\s\S]*)<\/main>/i)
+  if (main) s = main[1]
   // Block-level boundaries become newlines so paragraphs survive.
   s = s.replace(/<br\s*\/?>/gi, '\n')
   s = s.replace(
