@@ -140,6 +140,21 @@ describe('ingestDocument', () => {
     expect(state.inserted![0].embedding).toBeNull()
   })
 
+  it('starts every chunk with the document title, and embeds it that way', async () => {
+    const { db, state } = makeDb()
+    const title = 'Iyappa Cow Ghee (Ayyappa Ghee) – Rasipuram Traditional Ghee'
+    const note = 'the product will come back to stock after diwali that is after 8th of nov.'
+    await ingestDocument(db, 'acct', { embeddingsApiKey: 'sk-x' }, 'doc-1', note, `  ${title} `)
+    expect(state.inserted![0].content).toBe(`${title}\n\n${note}`)
+    expect(h.embedTexts).toHaveBeenCalledWith('sk-x', [`${title}\n\n${note}`])
+  })
+
+  it('stores bare chunks when there is no title', async () => {
+    const { db, state } = makeDb()
+    await ingestDocument(db, 'acct', { embeddingsApiKey: null }, 'doc-1', 'hello world', '  ')
+    expect(state.inserted![0].content).toBe('hello world')
+  })
+
   it('deletes existing chunks and inserts nothing for empty content', async () => {
     const { db, state } = makeDb()
     await ingestDocument(db, 'acct', { embeddingsApiKey: 'sk-x' }, 'doc-1', '   ')

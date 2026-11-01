@@ -85,6 +85,7 @@ export async function POST(request: Request) {
         { embeddingsApiKey },
         doc.id,
         content,
+        title,
       )
     } catch (err) {
       const message = err instanceof AiError ? err.message : t('ai.knowledge.indexingFailed')

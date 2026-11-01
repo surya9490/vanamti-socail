@@ -24,6 +24,12 @@ interface MatchRow {
  * existing chunks, re-chunks the content, and — when the account has an
  * embeddings key — embeds each chunk. Runs under whatever client the
  * caller passes (service-role for ingest routes).
+ *
+ * Each chunk starts with the document's title, so a note that never
+ * names its subject still matches questions about it. Live 2026-11-01:
+ * a doc titled "Iyappa Cow Ghee…" whose text was only "the product
+ * will come back to stock after diwali…" ranked 180th of 275 for "I
+ * want iyappa cow ghee"; with the title it ranks 1st.
  */
 export async function ingestDocument(
   db: SupabaseClient,
@@ -31,8 +37,10 @@ export async function ingestDocument(
   config: Pick<AiConfig, 'embeddingsApiKey'>,
   documentId: string,
   content: string,
+  title?: string | null,
 ): Promise<IngestResult> {
-  const chunks = chunkText(content)
+  const heading = title?.trim()
+  const chunks = chunkText(content).map((c) => (heading ? `${heading}\n\n${c}` : c))
 
   // Replace, don't append — re-ingest must be idempotent.
   const { error: delErr } = await db

@@ -40,7 +40,7 @@ export async function GET(_request: Request, { params }: Params) {
 
 /**
  * PATCH /api/ai/knowledge/[id]  (admin+) — update title/content and
- * re-index when the content changed.
+ * re-index when either changed (every chunk starts with the title).
  */
 export async function PATCH(request: Request, { params }: Params) {
   try {
@@ -71,7 +71,7 @@ export async function PATCH(request: Request, { params }: Params) {
       .update(update)
       .eq('account_id', accountId)
       .eq('id', id)
-      .select('id')
+      .select('id, title, content')
       .maybeSingle()
     if (error) {
       console.error('[ai/knowledge/[id] PATCH] error:', error)
@@ -79,14 +79,14 @@ export async function PATCH(request: Request, { params }: Params) {
     }
     if (!updated) return NextResponse.json({ error: t('common.notFound') }, { status: 404 })
 
-    if (content !== undefined) {
+    if (content !== undefined || title !== undefined) {
       const { key: embeddingsApiKey, corrupt } = await loadEmbeddingsKey(
         supabase,
         accountId,
       )
       let ingest: IngestResult
       try {
-        ingest = await ingestDocument(supabase, accountId, { embeddingsApiKey }, id, content)
+        ingest = await ingestDocument(supabase, accountId, { embeddingsApiKey }, id, updated.content, updated.title)
       } catch (err) {
         const message = err instanceof AiError ? err.message : t('ai.knowledge.indexingFailed')
         console.error('[ai/knowledge/[id] PATCH] ingest error:', err)

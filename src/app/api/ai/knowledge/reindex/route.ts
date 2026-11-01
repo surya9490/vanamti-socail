@@ -24,7 +24,7 @@ export async function POST() {
 
     const { data: docs, error } = await supabase
       .from('ai_knowledge_documents')
-      .select('id, content')
+      .select('id, title, content')
       .eq('account_id', accountId)
     if (error) {
       console.error('[ai/knowledge/reindex] fetch error:', error)
@@ -59,7 +59,7 @@ export async function POST() {
     const keywordOnly: string[] = []
     for (const doc of docs ?? []) {
       try {
-        const result = await ingestDocument(supabase, accountId, { embeddingsApiKey }, doc.id, doc.content)
+        const result = await ingestDocument(supabase, accountId, { embeddingsApiKey }, doc.id, doc.content, doc.title)
         reindexed += 1
         if (result.keywordOnly) {
           keywordOnly.push(doc.id)

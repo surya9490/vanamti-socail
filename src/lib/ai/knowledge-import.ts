@@ -192,6 +192,7 @@ export async function importSiteIntoKnowledge(
         { embeddingsApiKey },
         documentId,
         page.text,
+        page.title,
       )
     } catch (err) {
       // The document is saved; only its (optional) semantic index
