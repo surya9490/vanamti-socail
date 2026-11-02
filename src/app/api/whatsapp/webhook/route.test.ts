@@ -1173,3 +1173,41 @@ describe('inbound webhook: first_inbound_message fires once', () => {
     expect(h.state.firstInboundClaims).toBe(0)
   })
 })
+
+describe('inbound webhook: STOP / START tell subscribers', () => {
+  const reply = (body: string) => runWebhook({ ...TEXT_MESSAGE, text: { body } })
+
+  it('a STOP sets the opt-out and dispatches contact.opted_out, not message.received', async () => {
+    await reply('Stop')
+
+    expect(h.state.contactUpdates).toContainEqual(
+      expect.objectContaining({ opted_out_at: expect.any(String) }),
+    )
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(h.dispatchWebhookEvent.mock.calls[0].slice(1)).toEqual([
+      'acc-1',
+      'contact.opted_out',
+      { contact_id: 'contact-1', phone: '15551230000' },
+    ])
+    expect(h.dispatchInboundToFlows).not.toHaveBeenCalled()
+  })
+
+  it('a START clears the opt-out and dispatches contact.opted_in', async () => {
+    await reply('START')
+
+    expect(h.state.contactUpdates).toContainEqual(
+      expect.objectContaining({ opted_out_at: null }),
+    )
+    expect(h.dispatchWebhookEvent.mock.calls[0].slice(1)).toEqual([
+      'acc-1',
+      'contact.opted_in',
+      { contact_id: 'contact-1', phone: '15551230000' },
+    ])
+  })
+
+  it('an ordinary message mentioning stop is not an opt-out', async () => {
+    await reply("please don't stop my order")
+
+    expect(h.dispatchWebhookEvent.mock.calls.map((c) => c[2])).toEqual(['message.received'])
+  })
+})

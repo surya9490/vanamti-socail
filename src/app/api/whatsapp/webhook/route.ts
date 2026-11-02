@@ -577,11 +577,15 @@ async function handleStatusUpdate(
  * A STOP or START reply: set or clear the contact's opt-out, then confirm
  * to the customer and mirror the confirmation into the inbox. The flag is
  * what protects the customer, so a failed confirmation is only logged.
+ * Subscribers hear about it last (contact.opted_out / contact.opted_in),
+ * once the flag is set — the reply returns before message.received fires.
  */
 async function handleOptOutReply(args: {
   action: 'stop' | 'start'
+  accountId: string
   contactId: string
   conversationId: string
+  phone: string | null
   to: string
   phoneNumberId: string
   accessToken: string
@@ -617,6 +621,14 @@ async function handleOptOutReply(args: {
     }
   }
   console.log(`[opt-out] contact ${args.contactId} ${args.action === 'stop' ? 'opted out' : 'opted back in'}`)
+
+  if (optErr) return
+  await dispatchWebhookEvent(
+    supabaseAdmin(),
+    args.accountId,
+    args.action === 'stop' ? 'contact.opted_out' : 'contact.opted_in',
+    { contact_id: args.contactId, phone: args.phone }
+  )
 }
 
 async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
@@ -931,8 +943,10 @@ async function processMessage(
   if (optOutAction) {
     await handleOptOutReply({
       action: optOutAction,
+      accountId,
       contactId: contactRecord.id,
       conversationId: conversation.id,
+      phone: identity.phone || null,
       to: identity.phone || identity.waUserId || '',
       phoneNumberId,
       accessToken,

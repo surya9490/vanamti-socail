@@ -333,6 +333,8 @@ things happen in your account. **Migration required:** apply
 | `message.received`       | An inbound message arrives from a contact         |
 | `message.status_updated` | A message you sent changed delivery status        |
 | `conversation.created`   | A new conversation is opened for a contact        |
+| `contact.opted_out`      | A contact replied STOP: marketing is off for them |
+| `contact.opted_in`       | A contact replied START: marketing is back on     |
 
 ### Managing endpoints
 
@@ -374,6 +376,8 @@ delivery uuid you can dedupe on, and `data` varies by `event`:
 { "conversation_id": "…", "contact_id": "…", "whatsapp_message_id": "wamid.…", "content_type": "text", "text": "Hi 👋" }
 // conversation.created
 { "conversation_id": "…", "contact_id": "…" }
+// contact.opted_out, contact.opted_in (phone is null for a contact known only by username)
+{ "contact_id": "…", "phone": "919876543210" }
 // message.status_updated
 { "whatsapp_message_id": "wamid.…", "conversation_id": "…", "status": "delivered" }
 ```
