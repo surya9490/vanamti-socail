@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
     recentAiMessages: [] as { id: string; created_at: string }[],
+    ownInbound: null as { id: string; created_at: string } | null,
     recentInbounds: [] as { created_at: string; content_type?: string; content_text?: string | null }[],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
@@ -62,9 +63,13 @@ vi.mock('./admin-client', () => ({
           gte: () => typeof chain
           order: () => typeof chain
           limit: () => Promise<{ data: unknown; error: null }>
+          maybeSingle: () => Promise<{ data: unknown; error: null }>
           _isOrdered: boolean
         } = {
           _isOrdered: false,
+          // Own-inbound lookup (lib/ai/supersede.ts). Null by default:
+          // the supersede checks then use their clock fallback.
+          maybeSingle: () => Promise.resolve({ data: h.state.ownInbound, error: null }),
           select: () => chain,
           eq: () => chain,
           gt: () => chain,
@@ -178,6 +183,7 @@ beforeEach(() => {
   }
   h.state.autoResponders = []
   h.state.recentAiMessages = []
+  h.state.ownInbound = null
   // Default: two customer inbounds 1 second apart → no silence gap.
   // Keeps the "greeting clause" out of the system prompt for the
   // existing tests, so they can keep asserting the base prompt.
@@ -334,19 +340,21 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).toHaveBeenCalled()
   })
 
-  it('skips when a newer customer inbound arrived while generating', async () => {
-    // Post-generation race check. Two dispatches for two rapid
-    // customer messages: the first one, having already finished
-    // generation, should NOT send if the mock now shows a newer
-    // customer inbound (i.e. the second dispatch will produce a
-    // fuller reply). Prevents double-messaging.
+  it('skips when the customer sent a later message, even one stamped before this dispatch started', async () => {
+    // Post-generation race check. Live 2026-11-19: "Ues" then "Yes"
+    // two seconds apart. WhatsApp stamps "Yes" with its SEND time,
+    // which was before the "Ues" dispatch started (Meta delivered it
+    // late), so a clock-based check missed it and both dispatches
+    // sent a payment link. Message order must decide.
     //
     // The mock's non-ordered messages query returns recentAiMessages
-    // — that's how the post-gen check receives its "newer inbound"
-    // signal in tests (schema-wise it's customer messages; the mock
-    // just repurposes the same field).
+    // — that's how the check receives the customer's messages in
+    // tests (the mock just repurposes the field).
+    const sent = (msAgo: number) => new Date(Date.now() - msAgo).toISOString()
+    h.state.ownInbound = { id: 'own-ues', created_at: sent(3000) }
     h.state.recentAiMessages = [
-      { id: 'newer-customer-msg', created_at: new Date().toISOString() },
+      { id: 'own-ues', created_at: sent(3000) },
+      { id: 'later-yes', created_at: sent(1000) },
     ]
     await dispatchInboundToAiReply(ARGS)
     expect(h.generateReply).toHaveBeenCalled() // generation still ran

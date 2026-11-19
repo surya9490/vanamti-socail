@@ -14,10 +14,9 @@ import type { AiTool } from './registry'
 //   * Phone comes from ctx.contactPhone — NEVER from the model.
 //     Otherwise a poisoned prompt could route a fake order to a
 //     different customer's WhatsApp for confirmation.
-//   * Idempotency is NOT built in — the tool creates a new draft on
-//     every call. The prompt is responsible for confirming with the
-//     customer before invoking, and the sender-side handler warns
-//     on repeat calls in the same conversation via the cool-down.
+//   * The same purchase in the same conversation within 10 minutes
+//     returns the same payment link instead of a second draft (see
+//     DRAFT_REUSE_MS below).
 //   * Errors return a friendly string; the model apologises and
 //     offers the product URL as a fallback path to purchase.
 //
@@ -353,65 +352,123 @@ export const createDraftOrderTool: AiTool = {
       quantity,
     }))
 
-    const baseUrl = (process.env.VANAMATI_APP_URL || '').replace(/\/$/, '')
-    const apiKey = process.env.VANAMATI_ORDER_STATUS_KEY || ''
+    // Payload shape: line_items[] is the new multi-item field.
+    // For backwards compat with the Vanamati app's current
+    // single-item endpoint, we ALSO include variant_id + quantity
+    // at the top level when there's exactly one line item, so
+    // an un-updated Vanamati app still works for the common case.
+    // Once the app understands line_items[], the flat fields are
+    // harmless duplicates.
+    const payload: Record<string, unknown> = {
+      line_items: lineItems,
+      phone,
+    }
+    if (lineItems.length === 1) {
+      payload.variant_id = lineItems[0].variant_id
+      payload.quantity = lineItems[0].quantity
+    }
+    if (customerName) payload.customer_name = customerName
+    if (fullAddress) {
+      payload.address = {
+        line1: addressLine1,
+        line2: addressLine2 || null,
+        city,
+        state,
+        pincode,
+        country: 'India',
+      }
+    }
 
-    try {
-      // Payload shape: line_items[] is the new multi-item field.
-      // For backwards compat with the Vanamati app's current
-      // single-item endpoint, we ALSO include variant_id + quantity
-      // at the top level when there's exactly one line item, so
-      // an un-updated Vanamati app still works for the common case.
-      // Once the app understands line_items[], the flat fields are
-      // harmless duplicates.
-      const payload: Record<string, unknown> = {
-        line_items: lineItems,
-        phone,
-      }
-      if (lineItems.length === 1) {
-        payload.variant_id = lineItems[0].variant_id
-        payload.quantity = lineItems[0].quantity
-      }
-      if (customerName) payload.customer_name = customerName
-      if (fullAddress) {
-        payload.address = {
-          line1: addressLine1,
-          line2: addressLine2 || null,
-          city,
-          state,
-          pincode,
-          country: 'India',
-        }
-      }
-      const response = await fetch(`${baseUrl}/api/draft-orders/create`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-        },
-        body: JSON.stringify(payload),
-      })
-      if (!response.ok) {
-        const text = await response.text().catch(() => '')
-        console.warn(
-          `[create_draft_order] Vanamati ${response.status}:`,
-          text.slice(0, 200),
-        )
-        return UNAVAILABLE
-      }
-      const body = (await response.json()) as {
-        invoice_url?: string
-      }
-      if (!body.invoice_url) return UNAVAILABLE
+    // Same purchase again → the same link (see DRAFT_REUSE_MS).
+    const key = purchaseKey(ctx.conversationId, payload)
+    const now = Date.now()
+    for (const [k, v] of recentDrafts) {
+      if (now - v.at > DRAFT_REUSE_MS) recentDrafts.delete(k)
+    }
+    const existing = recentDrafts.get(key)
+    if (existing) return existing.result
+    const result = createViaVanamati(payload, lineItems.length)
+    recentDrafts.set(key, { at: now, result })
+    const text = await result
+    if (!text.startsWith(CREATED_PREFIX)) recentDrafts.delete(key) // let a retry try again
+    return text
+  },
+}
 
-      const summary =
-        lineItems.length > 1
-          ? `Draft order created with ${lineItems.length} items — ONE payment link covers them all. Share verbatim (do NOT claim payment done; it happens on this page):`
-          : `Draft order created. Share this payment link with the customer verbatim (do NOT claim the order is placed — payment happens on this page):`
-      return `${summary}\n\n${body.invoice_url}`
-    } catch (err) {
-      console.warn('[create_draft_order] fetch failed:', err)
+/** Prefix of every successful tool result — the dedupe caches only these. */
+const CREATED_PREFIX = 'Draft order created'
+
+// One purchase, one payment link. Several dispatches can reach this
+// tool for the same "yes" within seconds (live 2026-11-19: "Ues",
+// "Ues", "Yes" → drafts #D33/#D34/#D35, two links sent). A call for
+// the same conversation, items, phone, name and address within this
+// window returns the first call's link; a concurrent call awaits the
+// one in flight instead of creating its own. A changed address or
+// item is a new purchase and gets a new draft. In-process memory: the
+// app runs as one service instance; after a restart the next call
+// simply creates a fresh draft.
+const DRAFT_REUSE_MS = 10 * 60_000
+const recentDrafts = new Map<string, { at: number; result: Promise<string> }>()
+
+/** Test hook. */
+export function resetDraftOrderDedupe(): void {
+  recentDrafts.clear()
+}
+
+function purchaseKey(conversationId: string, payload: Record<string, unknown>): string {
+  // Punctuation / spacing / case differences between two calls for the
+  // same address ("No.91, 3rd East" vs "No.91 3rd East") are the same purchase.
+  const norm = (v: unknown) => String(v ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  const items = (payload.line_items as ResolvedLineItem[])
+    .map((i) => `${i.variant_id}x${i.quantity}`)
+    .sort()
+    .join(',')
+  const a = (payload.address ?? {}) as Record<string, unknown>
+  return [
+    conversationId,
+    items,
+    norm(payload.phone),
+    norm(payload.customer_name),
+    norm(a.line1),
+    norm(a.line2),
+    norm(a.city),
+    norm(a.pincode),
+  ].join('|')
+}
+
+async function createViaVanamati(payload: Record<string, unknown>, itemCount: number): Promise<string> {
+  const baseUrl = (process.env.VANAMATI_APP_URL || '').replace(/\/$/, '')
+  const apiKey = process.env.VANAMATI_ORDER_STATUS_KEY || ''
+
+  try {
+    const response = await fetch(`${baseUrl}/api/draft-orders/create`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify(payload),
+    })
+    if (!response.ok) {
+      const text = await response.text().catch(() => '')
+      console.warn(
+        `[create_draft_order] Vanamati ${response.status}:`,
+        text.slice(0, 200),
+      )
       return UNAVAILABLE
     }
-  },
+    const body = (await response.json()) as {
+      invoice_url?: string
+    }
+    if (!body.invoice_url) return UNAVAILABLE
+
+    const summary =
+      itemCount > 1
+        ? `${CREATED_PREFIX} with ${itemCount} items — ONE payment link covers them all. Share verbatim (do NOT claim payment done; it happens on this page):`
+        : `${CREATED_PREFIX}. Share this payment link with the customer verbatim (do NOT claim the order is placed — payment happens on this page):`
+    return `${summary}\n\n${body.invoice_url}`
+  } catch (err) {
+    console.warn('[create_draft_order] fetch failed:', err)
+    return UNAVAILABLE
+  }
 }

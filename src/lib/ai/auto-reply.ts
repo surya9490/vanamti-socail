@@ -32,6 +32,7 @@ import { extractGrade, nextGrade, type LeadStage } from './grading'
 import { mirrorLeadStageToTag } from '@/lib/contacts/lead-tag'
 import { log, newTraceId } from '@/lib/log'
 import { pickModelForAutoReply } from './router'
+import { hasNewerCustomerText, loadOwnInbound } from './supersede'
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -190,6 +191,12 @@ export async function dispatchInboundToAiReply(
     const messages = endOnLatestCustomerTurn(await buildConversationContext(db, conversationId))
     if (messages.length === 0) return
 
+    // The message this dispatch answers — the supersede checks compare
+    // later customer messages against it.
+    const ownInbound = inboundMessageId
+      ? await loadOwnInbound(db, conversationId, inboundMessageId)
+      : null
+
     // Silence-gap detection for re-engagement greeting.
     //
     // If the customer's previous inbound was >SILENCE_GAP_DAYS ago
@@ -297,20 +304,10 @@ export async function dispatchInboundToAiReply(
       if (batchWaitSeconds > 0) {
         const debounceStartedAt = new Date().toISOString()
         await new Promise((r) => setTimeout(r, batchWaitSeconds * 1000))
-        // Only TEXT supersedes text — a voice note / image / doc
-        // arriving during the wait doesn't trigger its own AI
-        // reply (the AI is text-only), so it shouldn't cancel this
-        // dispatch. Otherwise the customer sends "hello" then a
-        // voice note and gets zero replies.
-        const { data: newerInbound } = await db
-          .from('messages')
-          .select('id')
-          .eq('conversation_id', conversationId)
-          .eq('sender_type', 'customer')
-          .eq('content_type', 'text')
-          .gt('created_at', debounceStartedAt)
-          .limit(1)
-        if (newerInbound && newerInbound.length > 0) {
+        // Only TEXT supersedes text (see lib/ai/supersede.ts), and
+        // "newer" means sent after OUR message — not after the clock
+        // time we started waiting.
+        if (await hasNewerCustomerText(db, conversationId, ownInbound, debounceStartedAt)) {
           log.info('auto_reply.skipped', {
             trace_id,
             reason: 'superseded_by_newer_inbound',
@@ -776,19 +773,9 @@ export async function dispatchInboundToAiReply(
     // generation debounce is intentionally skipped for latency)
     // and typing-burst dispatches (where the newer inbound arrived
     // after the debounce sleep completed).
-    // Only TEXT counts as a supersede (see the pre-gen debounce
-     // for rationale). A voice note landing mid-generation must
-     // NOT cancel a text reply — the AI is text-only so the voice
-     // wouldn't have triggered its own reply either.
-    const { data: newerInboundAfterGen } = await db
-      .from('messages')
-      .select('id')
-      .eq('conversation_id', conversationId)
-      .eq('sender_type', 'customer')
-      .eq('content_type', 'text')
-      .gt('created_at', dispatchStartedAt)
-      .limit(1)
-    if (newerInboundAfterGen && newerInboundAfterGen.length > 0) {
+    // Ordered by message, not by clock — see lib/ai/supersede.ts for
+    // the 2026-11-19 double payment link this caused.
+    if (await hasNewerCustomerText(db, conversationId, ownInbound, dispatchStartedAt)) {
       log.info('auto_reply.skipped', {
         trace_id,
         reason: 'superseded_after_generation',
