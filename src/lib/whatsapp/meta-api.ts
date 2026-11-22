@@ -521,6 +521,33 @@ import {
   type SendTimeParams,
 } from './template-send-builder'
 
+/**
+ * Marketing templates go through Meta's Marketing Messages API
+ * (POST /{phone-number-id}/marketing_messages): same payload and price
+ * as /messages, but Meta optimises delivery, and it's the only route
+ * for marketing after 2027-10-13. Tested on v24.0; the rest of this
+ * file stays on v21.0.
+ * https://developers.facebook.com/documentation/business-messaging/whatsapp/marketing-messages/send-marketing-messages
+ */
+const MARKETING_MESSAGES_BASE = 'https://graph.facebook.com/v24.0'
+
+/**
+ * Only marketing templates (the endpoint rejects any other category),
+ * only to phone numbers (a username recipient turns Meta's optimisation
+ * off anyway), and never as a reply quote. Railway env
+ * WHATSAPP_MARKETING_MESSAGES_API=off sends everything through
+ * /messages again.
+ */
+function usesMarketingMessagesApi(
+  template: MessageTemplate | undefined,
+  to: string,
+  contextMessageId: string | undefined
+): boolean {
+  if (process.env.WHATSAPP_MARKETING_MESSAGES_API === 'off') return false
+  if (template?.category?.toLowerCase() !== 'marketing') return false
+  return !isBusinessScopedUserId(to) && !contextMessageId
+}
+
 export interface SendTemplateMessageArgs {
   phoneNumberId: string
   accessToken: string
@@ -615,6 +642,31 @@ export async function sendTemplateMessage(
   }
   if (contextMessageId) {
     body.context = { message_id: contextMessageId }
+  }
+
+  if (usesMarketingMessagesApi(template, to, contextMessageId)) {
+    const mm = await fetch(`${MARKETING_MESSAGES_BASE}/${phoneNumberId}/marketing_messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ ...body, product_policy: 'CLOUD_API_FALLBACK' }),
+    })
+    if (mm.ok) {
+      const data = await mm.json()
+      return { messageId: data.messages[0].id }
+    }
+    // A refused request created no message, so sending it again through
+    // /messages can't double-send. Whatever /messages says is what the
+    // caller sees.
+    const refused = await readMetaError(mm, `Meta API error: ${mm.status}`)
+    console.warn('[meta-api] marketing_messages refused; sending through /messages', {
+      template: templateName,
+      code: refused.code,
+      subcode: refused.subcode,
+      message: refused.message,
+    })
   }
 
   const response = await fetch(url, {
