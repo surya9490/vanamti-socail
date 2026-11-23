@@ -22,9 +22,9 @@ import { engineSendRawMessage } from '@/lib/flows/meta-send'
 // ============================================================
 
 /** A Graph API message body without `messaging_product` / `to`. */
-type GraphMessage = { type: string } & Record<string, unknown>
+export type GraphMessage = { type: string } & Record<string, unknown>
 
-interface Target {
+export interface Target {
   accountId: string
   conversationId: string
   contactId: string
@@ -34,7 +34,7 @@ function configured(): boolean {
   return Boolean(process.env.VANAMATI_APP_URL && process.env.VANAMATI_ORDER_STATUS_KEY)
 }
 
-async function callApp<T>(path: string, body: unknown): Promise<T | null> {
+export async function callApp<T>(path: string, body: unknown): Promise<T | null> {
   if (!configured()) return null
   try {
     const res = await fetch(`${process.env.VANAMATI_APP_URL!.replace(/\/+$/, '')}${path}`, {
@@ -82,6 +82,8 @@ export function summarizeGraphMessage(message: GraphMessage): string {
       return `[WhatsApp Pay order card] ${body}`
     case 'order_status':
       return `[Order update] ${body}`
+    case 'flow':
+      return `${body}\n[Shop now]`
     case 'cta_url':
       return `${body} ${interactive.action?.parameters?.url ?? ''}`.trim()
     default:
@@ -89,7 +91,7 @@ export function summarizeGraphMessage(message: GraphMessage): string {
   }
 }
 
-async function sendAll(target: Target, messages: GraphMessage[] | undefined): Promise<boolean> {
+export async function sendAll(target: Target, messages: GraphMessage[] | undefined): Promise<boolean> {
   if (!messages?.length) return false
   for (const message of messages) {
     await engineSendRawMessage({ ...target, message, summaryText: summarizeGraphMessage(message) })

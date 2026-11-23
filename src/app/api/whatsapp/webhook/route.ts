@@ -34,6 +34,7 @@ import {
   handlePaymentStatus,
   handlePayReply,
 } from '@/lib/orders/whatsapp-pay'
+import { handleShopReply } from '@/lib/orders/whatsapp-shop'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import {
   applyBroadcastRecipientStatus,
@@ -1104,6 +1105,17 @@ async function processMessage(
         ...payTarget,
         responseJson: message.interactive.nfm_reply.response_json,
       })
+    } else if (
+      message.interactive?.type === 'nfm_reply' &&
+      message.interactive.nfm_reply?.name === 'flow' &&
+      message.interactive.nfm_reply.response_json
+    ) {
+      // The shop Flow closed after "Place order": the app makes the
+      // order payable and answers with the pay button.
+      whatsappPayHandled = await handleShopReply({
+        ...payTarget,
+        responseJson: message.interactive.nfm_reply.response_json,
+      })
     } else if (message.type === 'text' || interactiveReplyId) {
       // "Pay by UPI" tapped, or "gpay" / "phonepe" typed, while an order
       // is waiting: the app answers with its UPI link (and QR).
@@ -1308,7 +1320,8 @@ async function parseMessageContent(
         const nfm = message.interactive.nfm_reply
         return {
           ...empty,
-          contentText: nfm?.body ? `[Address] ${nfm.body}` : '[Form reply]',
+          contentText:
+            nfm?.name === 'flow' ? '[Shop] Order placed' : nfm?.body ? `[Address] ${nfm.body}` : '[Form reply]',
         }
       }
       // The customer tapped a reply button or a list row on a message

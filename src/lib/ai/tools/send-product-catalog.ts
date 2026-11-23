@@ -1,6 +1,7 @@
 import type { AiTool } from './registry'
 import { engineSendProductList } from '@/lib/flows/meta-send'
 import { buildProductCatalog } from '@/lib/products/catalog-sections'
+import { openShop } from '@/lib/orders/whatsapp-shop'
 
 // ============================================================
 // send_product_catalog tool — sends a native WhatsApp Multi-Product
@@ -66,6 +67,32 @@ export const sendProductCatalogTool: AiTool = {
     required: ['body_text'],
   },
   async run(args, ctx) {
+    // The Flow shop, when the Vanamati app has it switched on (for this
+    // number): browse, cart, address and order in one place, with no
+    // 30-product cap. Off or unreachable → the catalog message below.
+    try {
+      const { data: contact } = await ctx.db
+        .from('contacts')
+        .select('phone, name')
+        .eq('id', ctx.contactId)
+        .eq('account_id', ctx.accountId)
+        .maybeSingle()
+      if (
+        contact?.phone &&
+        (await openShop({
+          accountId: ctx.accountId,
+          conversationId: ctx.conversationId,
+          contactId: ctx.contactId,
+          phone: contact.phone,
+          name: contact.name ?? null,
+        }))
+      ) {
+        return 'A "Shop now" button was sent to the customer: it opens our shop inside WhatsApp, where they can browse every product, add to cart, give their address and place the order; they then get a pay button here. Do NOT list products or take the order yourself. A short warm line is enough ("Tap Shop now to browse and order 🌿").'
+      }
+    } catch (err) {
+      console.warn('[send_product_catalog] shop check failed:', err instanceof Error ? err.message : err)
+    }
+
     if (!catalogConfigured()) return UNAVAILABLE
 
     const bodyText =
